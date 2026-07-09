@@ -16,6 +16,10 @@ exporters:
 processors:
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.120.0
   - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.120.0
+  # Required by the IDC sidecar configs (resource/identity static attribution).
+  # Was missing: the IDC collector-config-idc.yaml referenced it but the built
+  # collector didn't include it, so the IDC sidecar failed to start.
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.120.0
 
 receivers:
   - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.120.0
