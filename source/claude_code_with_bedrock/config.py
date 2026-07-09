@@ -105,6 +105,19 @@ class Profile:
     # Monitoring endpoint (saved from deploy, avoids re-reading CloudFormation outputs)
     otel_collector_endpoint: str | None = None  # OTel collector ALB endpoint URL
 
+    # Metrics backend for collector export.
+    # "cloudwatch-otlp" — CloudWatch native OTLP ingestion + PromQL (commercial regions).
+    # "amp"             — Amazon Managed Service for Prometheus + EMF dual-export.
+    #                     Required in GovCloud, where CloudWatch has no OTLP
+    #                     ingestion or PromQL support (the /v1/metrics and
+    #                     /api/v1/query routes 404 in that partition).
+    # "auto"            — resolve from the region's partition (default).
+    metrics_backend: str = "auto"
+    amp_workspace_id: str | None = None  # AMP workspace ID (saved from deploy)
+    amp_workspace_arn: str | None = None  # AMP workspace ARN (for IAM scoping)
+    amp_remote_write_url: str | None = None  # .../workspaces/<id>/api/v1/remote_write
+    amp_query_url: str | None = None  # .../workspaces/<id>/api/v1/query
+
     # Federation configuration
     federation_type: str = "cognito"  # "cognito" or "direct"
     federated_role_arn: str | None = None  # ARN for Direct STS federation
@@ -202,6 +215,22 @@ class Profile:
         if hasattr(self, "auth_type") and self.auth_type:
             return self.auth_type
         return "oidc" if self.sso_enabled else "none"
+
+    @property
+    def effective_metrics_backend(self) -> str:
+        """Resolve metrics_backend ("auto" resolves by partition).
+
+        CloudWatch's OTLP ingestion and PromQL query routes exist only in
+        commercial regions; GovCloud (and China) deployments must export to an
+        Amazon Managed Service for Prometheus workspace instead. Old profiles
+        without the field behave as "auto".
+        """
+        backend = getattr(self, "metrics_backend", "auto") or "auto"
+        if backend != "auto":
+            return backend
+        from claude_code_with_bedrock.utils.partition import aws_partition_for_region
+
+        return "amp" if aws_partition_for_region(self.aws_region) != "aws" else "cloudwatch-otlp"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert profile to dictionary."""

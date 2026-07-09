@@ -1,0 +1,116 @@
+# ABOUTME: Local OTEL Collector sidecar config for IDC users on the AMP metrics
+# ABOUTME: backend (GovCloud). Static identity attributes (no otel-helper binary),
+# ABOUTME: exporting to Amazon Managed Service for Prometheus + EMF because CloudWatch
+# ABOUTME: has no OTLP ingestion or PromQL routes outside commercial regions.
+#
+# Placeholders replaced by installer:
+#   ${REGION}               - AWS region (e.g. us-gov-west-1)
+#   ${AMP_REMOTE_WRITE_URL} - AMP workspace remote-write URL
+#   ${USER_EMAIL}   - User's email (resolved from IDC ARN at package time)
+#   ${USER_NAME}    - User's display name (optional, defaults to email prefix)
+#   ${DEPARTMENT}   - Department (optional)
+#   ${TEAM_ID}      - Team identifier (optional)
+#   ${COST_CENTER}  - Cost center (optional)
+#   ${ORGANIZATION} - Organization (optional)
+#
+# See collector-config-amp.yaml for why there are two pipelines (delta vs
+# cumulative temporality) and collector-config-idc.yaml for why identity is
+# static on the IDC path.
+
+extensions:
+  sigv4auth:
+    service: "aps"
+    region: "${REGION}"
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: localhost:4318
+        include_metadata: true
+
+processors:
+  batch/metrics:
+    timeout: 60s
+  deltatocumulative:
+  # Static identity: baked at distribution time from IDC user's email.
+  resource/identity:
+    attributes:
+      - key: user.email
+        value: "${USER_EMAIL}"
+        action: upsert
+      - key: user.name
+        value: "${USER_NAME}"
+        action: upsert
+      - key: department
+        value: "${DEPARTMENT}"
+        action: upsert
+      - key: team.id
+        value: "${TEAM_ID}"
+        action: upsert
+      - key: cost_center
+        value: "${COST_CENTER}"
+        action: upsert
+      - key: organization
+        value: "${ORGANIZATION}"
+        action: upsert
+      - key: deployment.environment
+        value: "production"
+        action: insert
+
+exporters:
+  prometheusremotewrite:
+    endpoint: "${AMP_REMOTE_WRITE_URL}"
+    auth:
+      authenticator: sigv4auth
+    resource_to_telemetry_conversion:
+      enabled: true
+    add_metric_suffixes: false
+
+  awsemf:
+    namespace: ClaudeCode
+    log_group_name: /aws/claude-code/metrics
+    region: ${REGION}
+    output_destination: cloudwatch
+    log_retention: 7
+    resource_to_telemetry_conversion:
+      enabled: true
+    metric_declarations:
+      - dimensions: [[OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[department, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[team.id, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[organization, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[model, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[user.email, OTelLib]]
+        metric_name_selectors: ["claude_code.token.usage", "claude_code.cost.usage"]
+      - dimensions: [[cost_center, OTelLib]]
+        metric_name_selectors: ["claude_code.cost.usage", "claude_code.token.usage"]
+      - dimensions: [[type, OTelLib]]
+        metric_name_selectors: ["claude_code.token.usage", "claude_code.lines_of_code.count"]
+      - dimensions: [[tool_name, OTelLib]]
+        metric_name_selectors: ["claude_code.code_edit_tool.*"]
+      - dimensions: [[language, OTelLib]]
+        metric_name_selectors: ["claude_code.code_edit_tool.*"]
+      - dimensions: [[decision, OTelLib]]
+        metric_name_selectors: ["claude_code.code_edit_tool.decision"]
+
+service:
+  extensions: [sigv4auth]
+  telemetry:
+    logs:
+      level: info
+      output_paths: [stderr]
+  pipelines:
+    metrics/amp:
+      receivers: [otlp]
+      processors: [resource/identity, deltatocumulative, batch/metrics]
+      exporters: [prometheusremotewrite]
+    metrics/emf:
+      receivers: [otlp]
+      processors: [resource/identity, batch/metrics]
+      exporters: [awsemf]

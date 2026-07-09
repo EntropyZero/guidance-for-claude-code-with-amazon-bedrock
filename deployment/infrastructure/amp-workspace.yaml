@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon Managed Service for Prometheus workspace for Claude Code metrics.
+  Used where CloudWatch has no OTLP/PromQL support (GovCloud): the OTEL collector
+  remote-writes here and the quota monitor queries it with the same PromQL.'
+
+Parameters:
+  WorkspaceAlias:
+    Type: String
+    Default: ''
+    Description: Alias for the AMP workspace (defaults to the stack name)
+
+  RetentionPeriodInDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 3653
+    Description: How long AMP retains metric samples
+
+Conditions:
+  HasAlias: !Not [!Equals [!Ref WorkspaceAlias, '']]
+
+Resources:
+  Workspace:
+    Type: AWS::APS::Workspace
+    Properties:
+      Alias: !If [HasAlias, !Ref WorkspaceAlias, !Ref 'AWS::StackName']
+      WorkspaceConfiguration:
+        RetentionPeriodInDays: !Ref RetentionPeriodInDays
+      Tags:
+        - Key: Purpose
+          Value: Claude Code metrics (GovCloud OTLP-alternative backend)
+
+Outputs:
+  WorkspaceId:
+    Description: AMP workspace ID
+    Value: !GetAtt Workspace.WorkspaceId
+    Export:
+      Name: !Sub '${AWS::StackName}-WorkspaceId'
+
+  WorkspaceArn:
+    Description: AMP workspace ARN (for scoping aps:RemoteWrite / aps:QueryMetrics)
+    Value: !GetAtt Workspace.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-WorkspaceArn'
+
+  RemoteWriteUrl:
+    Description: Prometheus remote-write URL for the OTEL collector exporter
+    Value: !Sub 'https://aps-workspaces.${AWS::Region}.amazonaws.com/workspaces/${Workspace.WorkspaceId}/api/v1/remote_write'
+    Export:
+      Name: !Sub '${AWS::StackName}-RemoteWriteUrl'
+
+  QueryUrl:
+    Description: PromQL instant-query URL for the quota monitor
+    Value: !Sub 'https://aps-workspaces.${AWS::Region}.amazonaws.com/workspaces/${Workspace.WorkspaceId}/api/v1/query'
+    Export:
+      Name: !Sub '${AWS::StackName}-QueryUrl'

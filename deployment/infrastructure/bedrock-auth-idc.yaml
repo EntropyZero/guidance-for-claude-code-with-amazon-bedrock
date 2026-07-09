@@ -22,8 +22,17 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: Enable monitoring and logging capabilities
 
+  AmpWorkspaceArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ARN of the Amazon Managed Service for Prometheus workspace used as the
+      metrics backend (sidecar mode in GovCloud, where CloudWatch has no OTLP
+      ingestion). Empty disables the AMP remote-write and EMF delivery grants.
+
 Conditions:
   MonitoringEnabled: !Equals [!Ref EnableMonitoring, 'true']
+  HasAmpWorkspace: !Not [!Equals [!Ref AmpWorkspaceArn, '']]
 
 Resources:
   # Customer-managed IAM policy for Bedrock access
@@ -67,6 +76,27 @@ Resources:
                 - 'logs:PutLogEvents'
                 - 'logs:DescribeLogGroups'
                 - 'logs:DescribeLogStreams'
+              Resource: !Sub 'arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/claude-code/*'
+            - !Ref 'AWS::NoValue'
+          - !If
+            - HasAmpWorkspace
+            - Sid: AllowAmpRemoteWrite
+              Effect: Allow
+              Action:
+                - 'aps:RemoteWrite'
+              Resource: !Ref AmpWorkspaceArn
+            - !Ref 'AWS::NoValue'
+          - !If
+            - HasAmpWorkspace
+            - Sid: AllowEmfMetricDelivery
+              Effect: Allow
+              Action:
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:PutLogEvents'
+                - 'logs:DescribeLogGroups'
+                - 'logs:DescribeLogStreams'
+                - 'logs:PutRetentionPolicy'
               Resource: !Sub 'arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/claude-code/*'
             - !Ref 'AWS::NoValue'
   

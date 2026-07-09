@@ -32,12 +32,21 @@ WARNING_THRESHOLD_90 = int(os.environ.get("WARNING_THRESHOLD_90", "270000000"))
 quota_table = dynamodb.Table(QUOTA_TABLE)
 policies_table = dynamodb.Table(POLICIES_TABLE) if POLICIES_TABLE else None
 
-# PromQL endpoint
-PROMQL_ENDPOINT = f"https://monitoring.{METRICS_REGION}.amazonaws.com/api/v1/query"
+# Metrics backend: 'cloudwatch' queries CloudWatch's PromQL route (commercial
+# regions); 'amp' queries an Amazon Managed Service for Prometheus workspace
+# (GovCloud, where CloudWatch has no OTLP ingestion or PromQL — those routes
+# 404 in that partition). Both speak the same Prometheus HTTP query API; they
+# differ in endpoint, SigV4 service name, and metric/label naming (see
+# _usage_queries).
+METRICS_BACKEND = os.environ.get("METRICS_BACKEND", "cloudwatch")
+PROMQL_ENDPOINT = (
+    os.environ.get("PROMQL_ENDPOINT") or f"https://monitoring.{METRICS_REGION}.amazonaws.com/api/v1/query"
+)
+SIGNING_SERVICE = "aps" if METRICS_BACKEND == "amp" else "monitoring"
 
 
 def _promql_query(query, time_param=None):
-    """Execute a PromQL instant query against CloudWatch Prometheus-compatible API with SigV4."""
+    """Execute a PromQL instant query (CloudWatch or AMP endpoint) with SigV4."""
     data = urllib.parse.urlencode({"query": query})
     if time_param:
         data += f"&time={time_param}"
@@ -49,7 +58,7 @@ def _promql_query(query, time_param=None):
         headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
     )
     credentials = boto3.Session().get_credentials().get_frozen_credentials()
-    SigV4Auth(credentials, "monitoring", METRICS_REGION).add_auth(request)
+    SigV4Auth(credentials, SIGNING_SERVICE, METRICS_REGION).add_auth(request)
 
     req = urllib.request.Request(url, data=data.encode("utf-8"), headers=dict(request.headers), method="POST")
     try:
@@ -80,50 +89,72 @@ TOKEN_TYPE_TO_RATE_KEY = {
 }
 
 
+def _usage_queries(window):
+    """Build the per-backend PromQL queries and label naming for token usage.
+
+    CloudWatch backend: OTel-native store keeps dotted names/labels
+    ("claude_code.token.usage", "user.email"), and Claude Code exports counters
+    with DELTA temporality — so aggregation MUST use sum_over_time(), NOT
+    increase(). Each datapoint is the tokens emitted since the last export
+    (sawtooth); increase() assumes CUMULATIVE temporality and reads every
+    down-step as a counter reset — it returns empty or wildly understated
+    results, which froze DynamoDB and surfaced as "Daily Tokens: 0" in
+    `ccwb quota usage`.
+
+    AMP backend: the sidecar's prometheusremotewrite exporter normalizes names
+    and labels (claude_code_token_usage, user_email — dots become underscores)
+    and its deltatocumulative processor converts the delta counters to
+    CUMULATIVE (Prometheus remote-write rejects delta) — so here increase() IS
+    the correct function, exactly as the note below anticipated. Collector
+    restarts read as counter resets, which increase() handles.
+
+    Coupling: each arm is correct only for its backend's temporality. Keep the
+    collector config (collector-config*.yaml) and this function in sync.
+    """
+    if METRICS_BACKEND == "amp":
+        return {
+            "total": f"sum by (user_email)(increase(claude_code_token_usage[{window}s]))",
+            "type_model": f"sum by (user_email, type, model)(increase(claude_code_token_usage[{window}s]))",
+            "type": f"sum by (user_email, type)(increase(claude_code_token_usage[{window}s]))",
+            "email_label": "user_email",
+        }
+    return {
+        "total": f'sum by ("user.email")(sum_over_time({{"claude_code.token.usage"}}[{window}s]))',
+        "type_model": f'sum by ("user.email", type, model)(sum_over_time({{"claude_code.token.usage"}}[{window}s]))',
+        "type": f'sum by ("user.email", type)(sum_over_time({{"claude_code.token.usage"}}[{window}s]))',
+        "email_label": "user.email",
+    }
+
+
 def fetch_usage_from_promql():
     """Query PromQL for per-user token usage in the last aggregation window only.
 
-    Aggregation MUST use sum_over_time(), NOT increase(). Claude Code exports
-    ``claude_code.token.usage`` as an OpenTelemetry Counter with DELTA temporality
-    by default (OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta): each
-    datapoint is the tokens emitted since the last export, so the series steps up
-    AND down (a sawtooth). increase() assumes CUMULATIVE temporality (a monotonic
-    running total) and reads every down-step as a counter reset — it returns empty
-    or wildly understated results, which froze DynamoDB and surfaced as
-    "Daily Tokens: 0" in `ccwb quota usage`. sum_over_time() sums the per-interval
-    deltas in the window = tokens used in the last 15 minutes, matching how the
-    Athena/CloudWatch consumers compute usage.
-
-    Coupling: this is correct only while the metric is exported with delta
-    temporality. If a deployment sets the temporality preference to `cumulative`,
-    increase() would become the correct function instead.
+    See _usage_queries for the backend-specific aggregation functions and the
+    temporality reasoning (sum_over_time for CloudWatch delta counters,
+    increase for AMP cumulative counters).
     """
     window = AGGREGATION_WINDOW
+    queries = _usage_queries(window)
+    email_label = queries["email_label"]
 
     # Delta tokens per user in the last window
-    results = _promql_query(
-        f'sum by ("user.email")(sum_over_time({{"claude_code.token.usage"}}[{window}s]))'
-    )
+    results = _promql_query(queries["total"])
 
     # Delta token type AND model breakdown per user (for cost calculation)
-    type_model_results = _promql_query(
-        f'sum by ("user.email", type, model)(sum_over_time({{"claude_code.token.usage"}}[{window}s]))'
-    )
+    type_model_results = _promql_query(queries["type_model"])
 
     # Delta token type breakdown per user (without model, for backward compat)
-    type_results = _promql_query(
-        f'sum by ("user.email", type)(sum_over_time({{"claude_code.token.usage"}}[{window}s]))'
-    )
+    type_results = _promql_query(queries["type"])
 
     users = {}
     for r in results:
-        email = r["metric"].get("user.email", "")
+        email = r["metric"].get(email_label, "")
         val = float(r["value"][1])
         if email and val > 0:
             users[email] = {"total_tokens": val}
 
     for r in type_results:
-        email = r["metric"].get("user.email", "")
+        email = r["metric"].get(email_label, "")
         token_type = r["metric"].get("type", "")
         val = float(r["value"][1])
         if email and val > 0:
@@ -143,7 +174,7 @@ def fetch_usage_from_promql():
 
         rates = get_rates()
         for r in type_model_results:
-            email = r["metric"].get("user.email", "")
+            email = r["metric"].get(email_label, "")
             token_type = r["metric"].get("type", "")
             model = r["metric"].get("model", "")
             val = float(r["value"][1])
@@ -164,6 +195,11 @@ def fetch_usage_from_promql():
     # CoWork events are logged to /aws/claude-cowork/events and MetricFilters extract
     # per-user metrics into the ClaudeCoWork namespace with user_email dimension.
     # This ensures CoWork token consumption counts toward the same quota as Claude Code.
+    # CloudWatch backend only: CoWork requires central monitoring mode, and its
+    # MetricFilter-derived metrics live in CloudWatch — they never reach an AMP
+    # workspace, so skip the queries entirely on that backend.
+    if METRICS_BACKEND == "amp":
+        return users
     try:
         # CoWork metrics are MetricFilter-derived per-event token counts (delta,
         # not cumulative) — use sum_over_time() for the same reason as above.

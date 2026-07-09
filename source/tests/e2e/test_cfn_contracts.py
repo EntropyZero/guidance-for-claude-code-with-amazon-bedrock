@@ -140,6 +140,7 @@ class TestIAMPolicyValidity:
         "cur",
         "es",
         "aoss",
+        "aps",  # Amazon Managed Service for Prometheus (GovCloud metrics backend)
     }
 
     def _extract_actions(self, template: dict) -> list[str]:
@@ -234,6 +235,13 @@ class TestQuotaMonitoringTemplateContract:
         for policy in policies:
             statements = policy.get("PolicyDocument", {}).get("Statement", [])
             for stmt in statements:
+                # Conditional statements (!If [cond, then, else]) parse as a
+                # 3-element list via CFNLoader — unwrap the 'then' branch
+                # (the 'else' is AWS::NoValue).
+                if isinstance(stmt, list) and len(stmt) == 3 and isinstance(stmt[1], dict):
+                    stmt = stmt[1]
+                if not isinstance(stmt, dict):
+                    continue
                 actions = stmt.get("Action", [])
                 if isinstance(actions, str):
                     actions = [actions]

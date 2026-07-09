@@ -1,0 +1,330 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Claude Code monitoring dashboard over EMF-extracted classic CloudWatch
+  metrics (ClaudeCode namespace). Used with the AMP metrics backend — GovCloud has
+  no CloudWatch PromQL support, so the PromQL dashboard (claude-code-dashboard.yaml)
+  cannot render there. Widgets use Metrics Insights SQL over the dimension sets the
+  collector''s awsemf exporter declares; only declared dimensions are queryable.
+  "Active Users" panels show per-user series (Metrics Insights has no distinct-count),
+  full-cardinality ad-hoc queries live in the AMP workspace (PromQL via Grafana).'
+
+Parameters:
+  DashboardName:
+    Type: String
+    Default: ClaudeCodeDashboard
+    Description: Name for the CloudWatch dashboard
+
+  MetricsRegion:
+    Type: String
+    Default: us-east-1
+    Description: Region where the EMF metrics are extracted
+
+Resources:
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Ref DashboardName
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 2,
+              "properties": { "markdown": "## Overview", "background": "transparent" }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 2, "width": 6, "height": 4,
+              "properties": {
+                "title": "Total Tokens Used",
+                "view": "singleValue", "sparkline": true,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "Tokens" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 6, "y": 2, "width": 6, "height": 4,
+              "properties": {
+                "title": "Sessions",
+                "view": "singleValue", "sparkline": true,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.session.count\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "Sessions" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 2, "width": 6, "height": 4,
+              "properties": {
+                "title": "Estimated Cost (USD)",
+                "view": "singleValue", "sparkline": true,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.cost.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "USD" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 18, "y": 2, "width": 6, "height": 4,
+              "properties": {
+                "title": "Cache Hit Rate",
+                "view": "singleValue", "sparkline": true,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, type) WHERE type = 'cacheRead'", "id": "cr", "visible": false, "region": "${MetricsRegion}" } ],
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "tot", "visible": false, "region": "${MetricsRegion}" } ],
+                  [ { "expression": "100 * cr / tot", "id": "rate", "label": "%", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "text",
+              "x": 0, "y": 6, "width": 24, "height": 2,
+              "properties": { "markdown": "## Token Usage", "background": "transparent" }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 8, "width": 12, "height": 6,
+              "properties": {
+                "title": "Token Usage Over Time",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "Total Tokens" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 8, "width": 12, "height": 6,
+              "properties": {
+                "title": "Token Usage by Type",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, type) GROUP BY type", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 14, "width": 12, "height": 6,
+              "properties": {
+                "title": "Token Usage by Model",
+                "view": "timeSeries", "stacked": true,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, model) GROUP BY model ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 14, "width": 12, "height": 6,
+              "properties": {
+                "title": "Top Users by Token Usage",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, \"user.email\") GROUP BY \"user.email\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 20, "width": 12, "height": 6,
+              "properties": {
+                "title": "Estimated Cost by User (USD)",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.cost.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, \"user.email\") GROUP BY \"user.email\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 20, "width": 12, "height": 6,
+              "properties": {
+                "title": "Sessions by User",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.session.count\") FROM SCHEMA(\"ClaudeCode\", OTelLib, \"user.email\") GROUP BY \"user.email\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "text",
+              "x": 0, "y": 26, "width": 24, "height": 2,
+              "properties": { "markdown": "## Developer Productivity", "background": "transparent" }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 28, "width": 6, "height": 6,
+              "properties": {
+                "title": "Lines of Code",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.lines_of_code.count\") FROM SCHEMA(\"ClaudeCode\", OTelLib, type) GROUP BY type", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 6, "y": 28, "width": 6, "height": 6,
+              "properties": {
+                "title": "Commits",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.commit.count\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "Commits" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 28, "width": 6, "height": 6,
+              "properties": {
+                "title": "Active Hours",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.active_time.total\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "s", "visible": false, "region": "${MetricsRegion}" } ],
+                  [ { "expression": "s / 3600", "id": "h", "label": "Hours", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 18, "y": 28, "width": 6, "height": 6,
+              "properties": {
+                "title": "Pull Requests",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.pull_request.count\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "PRs" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 34, "width": 8, "height": 6,
+              "properties": {
+                "title": "Code Generation by Language",
+                "view": "pie",
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.code_edit_tool.decision\") FROM SCHEMA(\"ClaudeCode\", OTelLib, language) GROUP BY language ORDER BY SUM() DESC LIMIT 25", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 34, "width": 8, "height": 6,
+              "properties": {
+                "title": "Code Edit Decisions",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.code_edit_tool.decision\") FROM SCHEMA(\"ClaudeCode\", OTelLib, decision) GROUP BY decision", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 34, "width": 8, "height": 6,
+              "properties": {
+                "title": "Code Edits by Tool",
+                "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.code_edit_tool.decision\") FROM SCHEMA(\"ClaudeCode\", OTelLib, tool_name) GROUP BY tool_name", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "text",
+              "x": 0, "y": 40, "width": 24, "height": 2,
+              "properties": { "markdown": "## Organizational Breakdown", "background": "transparent" }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 42, "width": 12, "height": 6,
+              "properties": {
+                "title": "Token Usage by Department",
+                "view": "timeSeries", "stacked": true,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, department) GROUP BY department ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 42, "width": 12, "height": 6,
+              "properties": {
+                "title": "Token Usage by Team",
+                "view": "timeSeries", "stacked": true,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, \"team.id\") GROUP BY \"team.id\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "text",
+              "x": 0, "y": 48, "width": 24, "height": 2,
+              "properties": { "markdown": "## Bedrock API Health", "background": "transparent" }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 50, "width": 8, "height": 6,
+              "properties": {
+                "metrics": [
+                  [ { "expression": "SELECT SUM(InvocationThrottles) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "throttles", "region": "${MetricsRegion}" } ]
+                ],
+                "period": 300,
+                "title": "Bedrock Throttles by Model",
+                "yAxis": { "left": { "min": 0 } }, "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 50, "width": 8, "height": 6,
+              "properties": {
+                "metrics": [
+                  [ { "expression": "SELECT SUM(InvocationClientErrors) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "client_errors", "region": "${MetricsRegion}" } ]
+                ],
+                "period": 300,
+                "title": "Bedrock Client Errors by Model",
+                "yAxis": { "left": { "min": 0 } }, "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 50, "width": 8, "height": 6,
+              "properties": {
+                "metrics": [
+                  [ { "expression": "SELECT SUM(InvocationServerErrors) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "server_errors", "region": "${MetricsRegion}" } ]
+                ],
+                "period": 300,
+                "title": "Bedrock Server Errors by Model",
+                "yAxis": { "left": { "min": 0 } }, "view": "timeSeries", "stacked": false,
+                "region": "${MetricsRegion}"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  DashboardURL:
+    Description: Direct URL to the CloudWatch dashboard
+    Value: !Sub 'https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${DashboardName}'

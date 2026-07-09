@@ -49,10 +49,19 @@ Parameters:
       - 'false'
     Description: Enable CloudWatch monitoring for Bedrock usage
 
+  AmpWorkspaceArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ARN of the Amazon Managed Service for Prometheus workspace used as the
+      metrics backend (sidecar mode in GovCloud, where CloudWatch has no OTLP
+      ingestion). Empty disables the AMP remote-write and EMF delivery grants.
+
 Conditions:
   UseDirectIAM: !Equals [!Ref FederationType, direct]
   UseCognitoIdentity: !Equals [!Ref FederationType, cognito]
   MonitoringEnabled: !Equals [!Ref EnableMonitoring, 'true']
+  HasAmpWorkspace: !Not [!Equals [!Ref AmpWorkspaceArn, '']]
   # Partition-aware conditions for Cognito Identity service principals
   IsGovCloudWest: !Equals [!Ref 'AWS::Region', 'us-gov-west-1']
   IsGovCloudEast: !Equals [!Ref 'AWS::Region', 'us-gov-east-1']
@@ -141,6 +150,27 @@ Resources:
               Action:
                 - 'cloudwatch:PutMetricData'
               Resource: '*'
+            - !Ref 'AWS::NoValue'
+          - !If
+            - HasAmpWorkspace
+            - Sid: AllowAmpRemoteWrite
+              Effect: Allow
+              Action:
+                - 'aps:RemoteWrite'
+              Resource: !Ref AmpWorkspaceArn
+            - !Ref 'AWS::NoValue'
+          - !If
+            - HasAmpWorkspace
+            - Sid: AllowEmfMetricDelivery
+              Effect: Allow
+              Action:
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:PutLogEvents'
+                - 'logs:DescribeLogGroups'
+                - 'logs:DescribeLogStreams'
+                - 'logs:PutRetentionPolicy'
+              Resource: !Sub 'arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/claude-code/*'
             - !Ref 'AWS::NoValue'
 
   # ===============================================

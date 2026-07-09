@@ -768,23 +768,43 @@ class PackageCommand(Command):
         _is_oidc_auth = not _is_idc_auth
 
         if profile.monitoring_enabled and _is_sidecar:
+            # AMP backend (GovCloud): CloudWatch has no OTLP ingestion there, so the
+            # collector exports to the AMP workspace (+ EMF for the dashboard). The
+            # workspace must be deployed first — its URL is saved to the profile
+            # by 'ccwb deploy amp' (stack-ordering: fail clearly, not silently).
+            _amp_remote_write_url = None
+            if profile.effective_metrics_backend == "amp":
+                _amp_remote_write_url = getattr(profile, "amp_remote_write_url", None)
+                if not _amp_remote_write_url:
+                    console.print(
+                        "[red]Error: the 'amp' metrics backend is selected but no AMP workspace "
+                        "is recorded in the profile.[/red]"
+                    )
+                    console.print("Deploy it first: [cyan]ccwb deploy amp[/cyan] (or [cyan]ccwb deploy[/cyan])")
+                    return 1
+            _amp_suffix = "-amp" if _amp_remote_write_url else ""
+
             if _is_idc_auth:
                 # IDC sidecar: bake static identity into collector config (no otel-helper at runtime).
                 # Applies to both zero-binary (no quota) and IDC+quota paths.
                 self._generate_collector_config(
                     output_dir=output_dir,
-                    template_name="collector-config-idc.yaml",
+                    template_name=f"collector-config{_amp_suffix}-idc.yaml"
+                    if _amp_suffix
+                    else "collector-config-idc.yaml",
                     region=profile.aws_region or "us-east-1",
                     idc_user_email=idc_user_email,
                     otel_resource_attributes=otel_resource_attributes,
+                    amp_remote_write_url=_amp_remote_write_url,
                 )
             else:
                 # OIDC sidecar: otelHeadersHelper injects user identity at runtime via HTTP headers,
-                # so no identity is baked in — substitute only ${REGION}.
+                # so no identity is baked in — substitute only ${REGION} (+ AMP URL when applicable).
                 self._generate_collector_config(
                     output_dir=output_dir,
-                    template_name="collector-config.yaml",
+                    template_name=f"collector-config{_amp_suffix}.yaml",
                     region=profile.aws_region or "us-east-1",
+                    amp_remote_write_url=_amp_remote_write_url,
                 )
 
         # Create installer
@@ -1092,6 +1112,7 @@ class PackageCommand(Command):
         region: str,
         idc_user_email: str | None = None,
         otel_resource_attributes: str | None = None,
+        amp_remote_write_url: str | None = None,
     ) -> None:
         """Write collector-config.yaml to output_dir from the named otel_helper template.
 
@@ -1099,6 +1120,8 @@ class PackageCommand(Command):
           - OIDC sidecar     → collector-config.yaml (runtime header injection)
           - IDC zero-binary  → collector-config-idc.yaml (static identity baked in)
           - IDC+quota sidecar → collector-config-idc.yaml (static identity baked in)
+        On the AMP metrics backend (GovCloud) the -amp template variants are
+        used instead and ``amp_remote_write_url`` fills ${AMP_REMOTE_WRITE_URL}.
         """
         console = Console()
         template_src = Path(__file__).resolve().parent.parent.parent.parent / "otel_helper" / template_name
@@ -1108,6 +1131,8 @@ class PackageCommand(Command):
 
         content = template_src.read_text(encoding="utf-8")
         content = content.replace("${REGION}", region)
+        if amp_remote_write_url:
+            content = content.replace("${AMP_REMOTE_WRITE_URL}", amp_remote_write_url)
 
         if idc_user_email is not None:
             attrs: dict[str, str] = {}

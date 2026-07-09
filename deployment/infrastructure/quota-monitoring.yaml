@@ -107,10 +107,36 @@ Parameters:
     Default: ''
     Description: OIDC client ID (audience) for JWT validation
 
+  # Metrics backend for usage queries. 'cloudwatch' queries CloudWatch's PromQL
+  # route (commercial regions). 'amp' queries an Amazon Managed Service for
+  # Prometheus workspace — required in GovCloud, where CloudWatch has no OTLP
+  # ingestion or PromQL support.
+  MetricsBackend:
+    Type: String
+    Default: 'cloudwatch'
+    AllowedValues:
+      - 'cloudwatch'
+      - 'amp'
+    Description: Where the quota monitor queries usage metrics from
+
+  AmpQueryUrl:
+    Type: String
+    Default: ''
+    Description: >-
+      AMP workspace PromQL instant-query URL
+      (https://aps-workspaces.<region>.amazonaws.com/workspaces/<id>/api/v1/query).
+      Required when MetricsBackend is 'amp'.
+
+  AmpWorkspaceId:
+    Type: String
+    Default: ''
+    Description: AMP workspace ID for scoping aps:QueryMetrics (required when MetricsBackend is 'amp')
+
 Conditions:
   HasJwtAuth: !Not [!Equals [!Ref OidcIssuerUrl, '']]
   NoJwtAuth: !Equals [!Ref OidcIssuerUrl, '']
   BypassDetectionEnabled: !Equals [!Ref EnableBypassDetection, 'true']
+  UsesAmpBackend: !Equals [!Ref MetricsBackend, 'amp']
 
 Resources:
   # DynamoDB table for quota policies (user, group, default levels)
@@ -234,6 +260,15 @@ Resources:
                   - cloudwatch:GetMetricData
                   - cloudwatch:ListMetrics
                 Resource: '*'
+              # AMP backend (GovCloud): PromQL queries go to the workspace
+              # instead of CloudWatch's PromQL route.
+              - !If
+                - UsesAmpBackend
+                - Effect: Allow
+                  Action:
+                    - aps:QueryMetrics
+                  Resource: !Sub 'arn:${AWS::Partition}:aps:${AWS::Region}:${AWS::AccountId}:workspace/${AmpWorkspaceId}'
+                - !Ref 'AWS::NoValue'
 
   # Lambda function for quota monitoring
   QuotaMonitorFunction:
@@ -266,6 +301,8 @@ Resources:
           MONTHLY_ENFORCEMENT_MODE: !Ref MonthlyEnforcementMode
           ENABLE_FINEGRAINED_QUOTAS: !Ref EnableFinegrainedQuotas
           METRICS_REGION: !Ref 'AWS::Region'
+          METRICS_BACKEND: !Ref MetricsBackend
+          PROMQL_ENDPOINT: !Ref AmpQueryUrl
       Code: ./lambda-functions/quota_monitor/
 
   # EventBridge Rule to run quota monitor every 15 minutes

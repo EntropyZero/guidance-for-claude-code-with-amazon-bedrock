@@ -26,6 +26,7 @@ DESTROYABLE_STACKS = [
     "quota",
     "cowork-dashboard",
     "dashboard",
+    "amp",  # After quota/dashboard: they are wired to its workspace via profile fields
     "monitoring",
     "distribution",
     "networking",

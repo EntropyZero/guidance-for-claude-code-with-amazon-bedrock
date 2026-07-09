@@ -109,6 +109,33 @@ _MATRIX = [
     pytest.param(
         {
             "monitoring_mode": "sidecar",
+            "sso_enabled": True,
+            "auth_type": "oidc",
+            "provider_type": "okta",
+            "quota_monitoring_enabled": True,
+            "monitoring_enabled": True,
+            "analytics_enabled": True,
+            "aws_region": "us-gov-west-1",
+        },
+        {"amp", "auth", "dashboard", "s3bucket", "quota"},
+        id="sidecar-oidc-govcloud-amp",
+    ),
+    pytest.param(
+        {
+            "monitoring_mode": "sidecar",
+            "sso_enabled": False,
+            "auth_type": "idc",
+            "quota_monitoring_enabled": False,
+            "monitoring_enabled": True,
+            "analytics_enabled": True,
+            "aws_region": "us-gov-east-1",
+        },
+        {"amp", "auth", "dashboard"},
+        id="sidecar-idc-govcloud-amp",
+    ),
+    pytest.param(
+        {
+            "monitoring_mode": "sidecar",
             "sso_enabled": False,
             "auth_type": "idc",
             "quota_monitoring_enabled": False,
@@ -413,6 +440,7 @@ class TestGuardNewStacks:
             "analytics",
             "quota",
             "codebuild",
+            "amp",
         }
     )
 

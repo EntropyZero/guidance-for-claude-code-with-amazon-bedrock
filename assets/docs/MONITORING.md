@@ -56,6 +56,37 @@ poetry run ccwb package --go --target-platform all
 
 End users receive the `otel-helper` binary in their install package. It starts automatically when Claude Code launches and sends metrics to CloudWatch using the same federated credentials.
 
+### GovCloud: AMP metrics backend
+
+CloudWatch's OTLP ingestion (`monitoring.<region>.amazonaws.com/v1/metrics`) and
+PromQL query routes exist only in commercial regions — in AWS GovCloud (US) they
+return 404. For GovCloud profiles the tooling automatically switches to the
+`amp` metrics backend (`Profile.metrics_backend`, default `auto`, resolved by
+partition):
+
+- **`ccwb deploy`** additionally creates an Amazon Managed Service for
+  Prometheus workspace (`amp-workspace.yaml`, deployed before the auth stack so
+  user IAM can be scoped to it) and saves its URLs to the profile.
+- **The sidecar collector** exports through two pipelines: Prometheus
+  remote-write to the AMP workspace (full label cardinality for quota control;
+  Claude Code's delta counters are converted to cumulative first) and EMF into
+  the `ClaudeCode` CloudWatch namespace (feeds the dashboard).
+- **The dashboard stack** deploys `claude-code-dashboard-emf.yaml` — classic
+  Metrics Insights widgets over the EMF metrics, since PromQL widgets cannot
+  render in GovCloud. Only the dimension sets declared in the collector config
+  are queryable there; full-cardinality ad-hoc queries go against the AMP
+  workspace (e.g. via Grafana — Amazon Managed Grafana is available in GovCloud
+  but is not CloudFormation-deployable, so connecting it is a manual step).
+- **The quota monitor** queries the workspace's PromQL API (SigV4 service
+  `aps`) with Prometheus-normalized metric names (`claude_code_token_usage`,
+  label `user_email`) and `increase()` instead of `sum_over_time()`.
+
+Air-gapped packaging note: the AMP backend adds OCB components
+(`prometheusremotewrite`, `awsemf`, `deltatocumulative`, `resource`), so an
+offline Go bundle created before this feature must be re-generated with
+`scripts/prepare-offline-go-bundle.sh prepare` (the script reads the manifest,
+no script changes needed).
+
 ## Architecture (Central Collector)
 
 The following describes the Central Collector (ECS Fargate) architecture. The Sidecar Collector uses the same metric format but sends directly from the developer's machine to the CloudWatch OTLP endpoint — no ALB, ECS, or VPC required.
