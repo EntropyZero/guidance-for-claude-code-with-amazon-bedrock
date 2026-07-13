@@ -73,10 +73,15 @@ partition):
   the `ClaudeCode` CloudWatch namespace (feeds the dashboard).
 - **The dashboard stack** deploys `claude-code-dashboard-emf.yaml` — classic
   Metrics Insights widgets over the EMF metrics, since PromQL widgets cannot
-  render in GovCloud. Only the dimension sets declared in the collector config
-  are queryable there; full-cardinality ad-hoc queries go against the AMP
-  workspace (e.g. via Grafana — Amazon Managed Grafana is available in GovCloud
-  but is not CloudFormation-deployable, so connecting it is a manual step).
+  render in GovCloud (CloudWatch dashboard widgets can only query CloudWatch's
+  own stores, never an external Prometheus endpoint). Only the dimension sets
+  declared in the collector config are queryable there.
+- **Full-cardinality dashboards (optional):** a ready-made Grafana dashboard
+  over the AMP workspace ships at
+  `deployment/grafana/claude-code-amp-dashboard.json`. Amazon Managed Grafana
+  is available in GovCloud but not CloudFormation-deployable, so the workspace
+  is a one-time manual setup — see `deployment/grafana/README.md` for the
+  three-step import.
 - **The quota monitor** queries the workspace's PromQL API (SigV4 service
   `aps`) with Prometheus-normalized metric names (`claude_code_token_usage`,
   label `user_email`) and `increase()` instead of `sum_over_time()`.
