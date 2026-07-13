@@ -37,6 +37,7 @@ VALID_STACKS = [
     "auth",
     "networking",
     "monitoring",
+    "amp",
     "dashboard",
     "cowork-dashboard",
     "analytics",
@@ -437,6 +438,18 @@ class DeployCommand(Command):
                     )
                     return 1
                 stacks_to_deploy.append(("monitoring", "OpenTelemetry Collector"))
+            elif stack_arg == "amp":
+                if not profile.monitoring_enabled:
+                    console.print("[yellow]Monitoring is not enabled in your configuration.[/yellow]")
+                    return 1
+                if profile.effective_metrics_backend != "amp":
+                    console.print(
+                        "[yellow]The AMP workspace stack is only used with the 'amp' metrics backend "
+                        "(GovCloud/China, where CloudWatch has no OTLP ingestion or PromQL).[/yellow]"
+                    )
+                    console.print("[dim]This profile resolves to the 'cloudwatch-otlp' backend.[/dim]")
+                    return 1
+                stacks_to_deploy.append(("amp", "Prometheus Workspace (AMP metrics backend)"))
             elif stack_arg == "dashboard":
                 if profile.monitoring_enabled:
                     stacks_to_deploy.append(("dashboard", "CloudWatch Dashboard"))
@@ -683,11 +696,17 @@ class DeployCommand(Command):
         """
         stacks_to_deploy = []
 
-        if profile.effective_auth_type != "none":
-            stacks_to_deploy.append(("auth", "Authentication Stack (Cognito + IAM)"))
-
         monitoring_mode = getattr(profile, "monitoring_mode", "central")
         central_monitoring = profile.monitoring_enabled and monitoring_mode == "central"
+
+        # AMP workspace FIRST (sidecar + amp backend): the auth stack scopes user
+        # IAM (aps:RemoteWrite) to its ARN, and dashboard/quota read its outputs
+        # from the profile — all of them need the workspace to already exist.
+        if profile.monitoring_enabled and monitoring_mode == "sidecar" and profile.effective_metrics_backend == "amp":
+            stacks_to_deploy.append(("amp", "Prometheus Workspace (AMP metrics backend)"))
+
+        if profile.effective_auth_type != "none":
+            stacks_to_deploy.append(("auth", "Authentication Stack (Cognito + IAM)"))
 
         # Networking first so any downstream stack can read its outputs.
         need_networking = central_monitoring or profile.enable_distribution
@@ -712,9 +731,10 @@ class DeployCommand(Command):
                 if getattr(profile, "analytics_enabled", True):
                     stacks_to_deploy.append(("analytics", "Analytics Pipeline (Kinesis Firehose + Athena)"))
             else:
-                # Sidecar mode: metrics reach CloudWatch via the local collector,
-                # so the only server-side stack is the CloudWatch dashboard
-                # (PromQL). No networking/ECS, no Athena pipeline, and CoWork
+                # Sidecar mode: metrics reach the backend via the local collector,
+                # so the only server-side stacks are the metrics backend (AMP,
+                # scheduled FIRST above when applicable) and the CloudWatch
+                # dashboard. No networking/ECS, no Athena pipeline, and CoWork
                 # cannot export telemetry in this mode.
                 stacks_to_deploy.append(("dashboard", "CloudWatch Dashboard"))
 
@@ -845,6 +865,9 @@ class DeployCommand(Command):
                         f"IdentityPoolName={profile.identity_pool_name}",
                         f"AllowedBedrockRegions={','.join(bedrock_regions)}",
                         f"EnableMonitoring={str(profile.monitoring_enabled).lower()}",
+                        # Empty unless the AMP backend's workspace exists (full deploy
+                        # schedules the amp stack before auth so the ARN is available).
+                        f"AmpWorkspaceArn={getattr(profile, 'amp_workspace_arn', None) or ''}",
                     ]
                     return deploy_with_cf(
                         template,
@@ -953,6 +976,9 @@ class DeployCommand(Command):
                         f"IdentityPoolName={profile.identity_pool_name}",
                         f"AllowedBedrockRegions={','.join(bedrock_regions)}",
                         f"EnableMonitoring={str(profile.monitoring_enabled).lower()}",
+                        # Empty unless the AMP backend's workspace exists (full deploy
+                        # schedules the amp stack before auth so the ARN is available).
+                        f"AmpWorkspaceArn={getattr(profile, 'amp_workspace_arn', None) or ''}",
                     ]
                 )
 
@@ -1260,8 +1286,47 @@ class DeployCommand(Command):
 
                 return result
 
+            elif stack_type == "amp":
+                template = project_root / "deployment" / "infrastructure" / "amp-workspace.yaml"
+                stack_name = profile.stack_names.get("amp", f"{profile.identity_pool_name}-amp")
+                params = [f"WorkspaceAlias={stack_name}"]
+                result = deploy_with_cf(
+                    template, stack_name, params, task_description="Deploying Prometheus workspace (AMP)..."
+                )
+
+                if result == 0:
+                    # Save workspace coordinates to the profile: package (collector
+                    # remote-write URL), auth stacks (workspace ARN for IAM), and
+                    # the quota stack (query URL) all read them from there.
+                    outputs = get_stack_outputs(stack_name, profile.aws_region)
+                    if outputs and outputs.get("WorkspaceId"):
+                        profile.amp_workspace_id = outputs["WorkspaceId"]
+                        profile.amp_workspace_arn = outputs.get("WorkspaceArn")
+                        profile.amp_remote_write_url = outputs.get("RemoteWriteUrl")
+                        profile.amp_query_url = outputs.get("QueryUrl")
+                        try:
+                            Config.load().save_profile(profile)
+                            console.print(f"[dim]Saved AMP workspace to profile: {outputs['WorkspaceId']}[/dim]")
+                        except Exception:
+                            pass  # nosec B110
+                    else:
+                        console.print(
+                            "[red]AMP stack deployed but its outputs could not be read; "
+                            "the collector and quota monitor cannot be wired to the workspace.[/red]"
+                        )
+                        return 1
+
+                return result
+
             elif stack_type == "dashboard":
-                template = project_root / "deployment" / "infrastructure" / "claude-code-dashboard.yaml"
+                # The AMP backend has no CloudWatch PromQL store to chart, so its
+                # dashboard uses classic metric widgets over the EMF-extracted
+                # ClaudeCode namespace instead of PromQL widgets.
+                if profile.effective_metrics_backend == "amp":
+                    dashboard_template = "claude-code-dashboard-emf.yaml"
+                else:
+                    dashboard_template = "claude-code-dashboard.yaml"
+                template = project_root / "deployment" / "infrastructure" / dashboard_template
                 stack_name = profile.stack_names.get("dashboard", f"{profile.identity_pool_name}-dashboard")
                 params = [f"MetricsRegion={profile.aws_region}"]
                 return deploy_with_cf(
@@ -1335,6 +1400,25 @@ class DeployCommand(Command):
                     f"EnableFinegrainedQuotas={str(enable_finegrained_quotas).lower()}",
                     f"EnableBypassDetection={str(enable_bypass_detection).lower()}",
                 ]
+
+                # AMP backend (GovCloud): the quota monitor queries the workspace's
+                # PromQL API instead of CloudWatch's. The workspace must exist first
+                # — its coordinates are saved to the profile by 'ccwb deploy amp'.
+                if profile.effective_metrics_backend == "amp":
+                    amp_query_url = getattr(profile, "amp_query_url", None)
+                    amp_workspace_id = getattr(profile, "amp_workspace_id", None)
+                    if not amp_query_url or not amp_workspace_id:
+                        console.print(
+                            "[red]The 'amp' metrics backend is selected but no AMP workspace "
+                            "is recorded in the profile.[/red]"
+                        )
+                        console.print("Deploy it first: [cyan]ccwb deploy amp[/cyan]")
+                        return 1
+                    params += [
+                        "MetricsBackend=amp",
+                        f"AmpQueryUrl={amp_query_url}",
+                        f"AmpWorkspaceId={amp_workspace_id}",
+                    ]
 
                 # Package the template using AWS CLI
                 task = progress.add_task("Packaging quota monitoring Lambda functions...", total=None)
@@ -1651,6 +1735,9 @@ class DeployCommand(Command):
                         f"IdentityPoolName={profile.identity_pool_name}",
                         f"AllowedBedrockRegions={','.join(bedrock_regions)}",
                         f"EnableMonitoring={str(profile.monitoring_enabled).lower()}",
+                        # Empty unless the AMP backend's workspace exists (full deploy
+                        # schedules the amp stack before auth so the ARN is available).
+                        f"AmpWorkspaceArn={getattr(profile, 'amp_workspace_arn', None) or ''}",
                     ]
                 )
                 print_deploy_cmd(template, stack_name, params, ["CAPABILITY_NAMED_IAM"])

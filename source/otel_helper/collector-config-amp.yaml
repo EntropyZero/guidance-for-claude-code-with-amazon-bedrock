@@ -1,0 +1,134 @@
+# ABOUTME: Local OTEL Collector sidecar config for the AMP metrics backend (GovCloud).
+# ABOUTME: Same attribution as collector-config.yaml, but exports to an Amazon Managed
+# ABOUTME: Service for Prometheus workspace (+ EMF for the CloudWatch dashboard) because
+# ABOUTME: CloudWatch has no OTLP ingestion or PromQL routes outside commercial regions.
+#
+# Placeholders replaced by installer:
+#   ${REGION}               - AWS region (e.g. us-gov-west-1)
+#   ${AMP_REMOTE_WRITE_URL} - AMP workspace remote-write URL
+#                             (https://aps-workspaces.<region>.amazonaws.com/workspaces/<id>/api/v1/remote_write)
+#
+# Two pipelines, deliberately:
+#   metrics/amp — full-cardinality labels for quota control. Claude Code exports
+#     counters with DELTA temporality; Prometheus remote-write only accepts
+#     CUMULATIVE, so deltatocumulative converts (and the quota monitor uses
+#     increase() on this backend instead of sum_over_time()).
+#   metrics/emf — feeds the CloudWatch dashboard via EMF-extracted classic
+#     metrics. EMF consumes the delta datapoints directly (same as central
+#     mode) — do NOT add deltatocumulative here or dashboard sums double-count.
+
+extensions:
+  sigv4auth:
+    service: "aps"
+    region: "${REGION}"
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: localhost:4318
+        include_metadata: true
+
+processors:
+  batch/metrics:
+    timeout: 60s
+  deltatocumulative:
+  # Extract HTTP headers (injected by otelHeadersHelper) to resource attributes
+  # Headers are normalized to lowercase in metadata
+  attributes:
+    actions:
+      - key: user.email
+        from_context: metadata.x-user-email
+        action: upsert
+      - key: user.id
+        from_context: metadata.x-user-id
+        action: upsert
+      - key: user.name
+        from_context: metadata.x-user-name
+        action: upsert
+      - key: department
+        from_context: metadata.x-department
+        action: upsert
+      - key: team.id
+        from_context: metadata.x-team-id
+        action: upsert
+      - key: cost_center
+        from_context: metadata.x-cost-center
+        action: upsert
+      - key: organization
+        from_context: metadata.x-organization
+        action: upsert
+      - key: location
+        from_context: metadata.x-location
+        action: upsert
+      - key: role
+        from_context: metadata.x-role
+        action: upsert
+      - key: manager
+        from_context: metadata.x-manager
+        action: upsert
+      - key: deployment.environment
+        value: "production"
+        action: insert
+
+exporters:
+  prometheusremotewrite:
+    endpoint: "${AMP_REMOTE_WRITE_URL}"
+    auth:
+      authenticator: sigv4auth
+    # Resource attributes (user.email etc.) must become series labels — without
+    # this they fold into target_info and per-user quota queries see nothing.
+    resource_to_telemetry_conversion:
+      enabled: true
+    # Keep OTel names verbatim (claude_code_token_usage) instead of appending
+    # Prometheus unit/_total suffixes — the quota monitor's queries and any
+    # Grafana dashboards depend on stable names.
+    add_metric_suffixes: false
+
+  awsemf:
+    namespace: ClaudeCode
+    log_group_name: /aws/claude-code/metrics
+    region: ${REGION}
+    output_destination: cloudwatch
+    log_retention: 7
+    resource_to_telemetry_conversion:
+      enabled: true
+    metric_declarations:
+      - dimensions: [[OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[department, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[team.id, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[organization, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[model, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[user.email, OTelLib]]
+        metric_name_selectors: ["claude_code.token.usage", "claude_code.cost.usage"]
+      - dimensions: [[cost_center, OTelLib]]
+        metric_name_selectors: ["claude_code.cost.usage", "claude_code.token.usage"]
+      - dimensions: [[type, OTelLib]]
+        metric_name_selectors: ["claude_code.token.usage", "claude_code.lines_of_code.count"]
+      - dimensions: [[tool_name, OTelLib]]
+        metric_name_selectors: ["claude_code.code_edit_tool.*"]
+      - dimensions: [[language, OTelLib]]
+        metric_name_selectors: ["claude_code.code_edit_tool.*"]
+      - dimensions: [[decision, OTelLib]]
+        metric_name_selectors: ["claude_code.code_edit_tool.decision"]
+
+service:
+  extensions: [sigv4auth]
+  telemetry:
+    logs:
+      level: info
+      output_paths: [stderr]
+  pipelines:
+    metrics/amp:
+      receivers: [otlp]
+      processors: [attributes, deltatocumulative, batch/metrics]
+      exporters: [prometheusremotewrite]
+    metrics/emf:
+      receivers: [otlp]
+      processors: [attributes, batch/metrics]
+      exporters: [awsemf]
