@@ -1957,6 +1957,36 @@ class MultiProviderAuth:
                 return {"allowed": False, "reason": "error", "message": f"Quota check failed: {e}"}
             return {"allowed": True, "reason": "error"}
 
+    def _print_quota_usage_lines(self, usage: dict):
+        """Print per-period usage lines for the quota warning/blocked banners.
+
+        Token lines only render when a token limit is actually set — in cost
+        mode the limits are 0 and printing "0 / 0 tokens" hides the real
+        constraint. Dollar lines render whenever the quota API reported a
+        cost limit (cost mode or mixed policies). Mirrors the Go helper's
+        printQuotaUsageLines — keep in sync.
+        """
+        if "monthly_tokens" in usage and usage.get("monthly_limit"):
+            print(
+                f"  Monthly: {usage['monthly_tokens']:,} / {usage['monthly_limit']:,} tokens ({usage.get('monthly_percent', 0):.1f}%)",
+                file=sys.stderr,
+            )
+        if "daily_tokens" in usage and usage.get("daily_limit"):
+            print(
+                f"  Daily: {usage['daily_tokens']:,} / {usage['daily_limit']:,} tokens ({usage.get('daily_percent', 0):.1f}%)",
+                file=sys.stderr,
+            )
+        if usage.get("monthly_cost_limit"):
+            print(
+                f"  Monthly spend: ${usage.get('monthly_cost', 0):.2f} / ${usage['monthly_cost_limit']:.2f} ({usage.get('monthly_cost_percent', 0):.1f}%)",
+                file=sys.stderr,
+            )
+        if usage.get("daily_cost_limit"):
+            print(
+                f"  Daily spend: ${usage.get('daily_cost', 0):.2f} / ${usage['daily_cost_limit']:.2f} ({usage.get('daily_cost_percent', 0):.1f}%)",
+                file=sys.stderr,
+            )
+
     def _handle_quota_blocked(self, quota_result: dict) -> int:
         """Handle blocked quota by displaying user-friendly message.
 
@@ -1979,16 +2009,7 @@ class MultiProviderAuth:
 
         if usage:
             print("Current Usage:", file=sys.stderr)
-            if "monthly_tokens" in usage and "monthly_limit" in usage:
-                print(
-                    f"  Monthly: {usage['monthly_tokens']:,} / {usage['monthly_limit']:,} tokens ({usage.get('monthly_percent', 0):.1f}%)",
-                    file=sys.stderr,
-                )
-            if "daily_tokens" in usage and "daily_limit" in usage:
-                print(
-                    f"  Daily: {usage['daily_tokens']:,} / {usage['daily_limit']:,} tokens ({usage.get('daily_percent', 0):.1f}%)",
-                    file=sys.stderr,
-                )
+            self._print_quota_usage_lines(usage)
 
         if policy:
             print(f"\nPolicy: {policy.get('type', 'unknown')}:{policy.get('identifier', 'unknown')}", file=sys.stderr)
@@ -2035,6 +2056,23 @@ class MultiProviderAuth:
                     return f"{n / 1_000:.1f}K"
                 return str(int(n))
 
+            # Cost mode: token limits are 0 and the dollar budget governs —
+            # render spend instead of "0 / 0" token counts. The percent fields
+            # are already aliased to the governing cost percentages by the
+            # quota API. Mirrors the Go helper's buildQuotaHTML — keep in sync.
+            monthly_cost = usage.get("monthly_cost", 0)
+            monthly_cost_limit = usage.get("monthly_cost_limit", 0)
+            daily_cost = usage.get("daily_cost", 0)
+            daily_cost_limit = usage.get("daily_cost_limit", 0)
+
+            monthly_value = f"{format_tokens(monthly_tokens)} / {format_tokens(monthly_limit)}"
+            if not monthly_limit and monthly_cost_limit:
+                monthly_value = f"${monthly_cost:.2f} / ${monthly_cost_limit:.2f}"
+            daily_value = f"{format_tokens(daily_tokens)} / {format_tokens(daily_limit or 0)}"
+            if not daily_limit and daily_cost_limit:
+                daily_value = f"${daily_cost:.2f} / ${daily_cost_limit:.2f}"
+            has_daily = bool(daily_limit or daily_cost_limit)
+
             # Determine status styling
             if is_blocked:
                 status_emoji = "🚫"
@@ -2058,7 +2096,7 @@ class MultiProviderAuth:
                 return "#28a745"  # Green
 
             monthly_bar_color = bar_color(monthly_percent)
-            daily_bar_color = bar_color(daily_percent) if daily_limit else "#6c757d"
+            daily_bar_color = bar_color(daily_percent) if has_daily else "#6c757d"
 
             html = f"""<!DOCTYPE html>
 <html>
@@ -2155,8 +2193,7 @@ class MultiProviderAuth:
             <div class="usage-section">
                 <div class="usage-label">
                     <span>Monthly Usage</span>
-                    <span class="usage-value">{format_tokens(monthly_tokens)} / {format_tokens(monthly_limit)} ({
-                monthly_percent:.1f}%)</span>
+                    <span class="usage-value">{monthly_value} ({monthly_percent:.1f}%)</span>
                 </div>
                 <div class="progress-bar">
                     <div class="progress-fill" style="width: {min(monthly_percent, 100)}%; background: {
@@ -2168,12 +2205,12 @@ class MultiProviderAuth:
             </div>
             {
                 ""
-                if not daily_limit
+                if not has_daily
                 else f'''
             <div class="usage-section">
                 <div class="usage-label">
                     <span>Daily Usage</span>
-                    <span class="usage-value">{format_tokens(daily_tokens)} / {format_tokens(daily_limit)} ({daily_percent:.1f}%)</span>
+                    <span class="usage-value">{daily_value} ({daily_percent:.1f}%)</span>
                 </div>
                 <div class="progress-bar">
                     <div class="progress-fill" style="width: {min(daily_percent, 100)}%; background: {daily_bar_color};">
@@ -2259,16 +2296,7 @@ class MultiProviderAuth:
         print("=" * 60, file=sys.stderr)
 
         if usage:
-            if "monthly_tokens" in usage and "monthly_limit" in usage:
-                print(
-                    f"  Monthly: {usage['monthly_tokens']:,} / {usage['monthly_limit']:,} tokens ({monthly_percent:.1f}%)",
-                    file=sys.stderr,
-                )
-            if "daily_tokens" in usage and "daily_limit" in usage:
-                print(
-                    f"  Daily: {usage['daily_tokens']:,} / {usage['daily_limit']:,} tokens ({daily_percent:.1f}%)",
-                    file=sys.stderr,
-                )
+            self._print_quota_usage_lines(usage)
 
         print("=" * 60 + "\n", file=sys.stderr)
 

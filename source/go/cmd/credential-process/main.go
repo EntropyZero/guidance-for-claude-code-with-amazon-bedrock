@@ -1078,23 +1078,44 @@ func printQuotaWarning(qr *quota.Result) {
 	fmt.Fprintln(os.Stderr, "QUOTA WARNING")
 	fmt.Fprintln(os.Stderr, "============================================================")
 
-	if monthlyTokens, ok := usage["monthly_tokens"].(float64); ok {
-		if monthlyLimit, ok2 := usage["monthly_limit"].(float64); ok2 {
-			fmt.Fprintf(os.Stderr, "  Monthly: %s / %s tokens (%.1f%%)\n",
-				formatTokens(monthlyTokens), formatTokens(monthlyLimit), monthlyPercent)
-		}
-	}
-	if dailyTokens, ok := usage["daily_tokens"].(float64); ok {
-		if dailyLimit, ok2 := usage["daily_limit"].(float64); ok2 {
-			fmt.Fprintf(os.Stderr, "  Daily: %s / %s tokens (%.1f%%)\n",
-				formatTokens(dailyTokens), formatTokens(dailyLimit), dailyPercent)
-		}
-	}
+	printQuotaUsageLines(usage, monthlyPercent, dailyPercent)
 
 	fmt.Fprintln(os.Stderr, "============================================================")
 
 	// Show browser notification for visual feedback (invisible stderr → visible browser)
 	showQuotaBrowserNotification(qr, false)
+}
+
+// printQuotaUsageLines prints the per-period usage lines for the quota
+// warning/blocked banners. Token lines only render when a token limit is
+// actually set — in cost mode the limits are 0 and printing "0 / 0 tokens"
+// hides the real constraint. Dollar lines render whenever the quota API
+// reported a cost limit (cost mode or mixed policies).
+func printQuotaUsageLines(usage map[string]interface{}, monthlyPercent, dailyPercent float64) {
+	if monthlyTokens, ok := usage["monthly_tokens"].(float64); ok {
+		if monthlyLimit, ok2 := usage["monthly_limit"].(float64); ok2 && monthlyLimit > 0 {
+			fmt.Fprintf(os.Stderr, "  Monthly: %s / %s tokens (%.1f%%)\n",
+				formatTokens(monthlyTokens), formatTokens(monthlyLimit), monthlyPercent)
+		}
+	}
+	if dailyTokens, ok := usage["daily_tokens"].(float64); ok {
+		if dailyLimit, ok2 := usage["daily_limit"].(float64); ok2 && dailyLimit > 0 {
+			fmt.Fprintf(os.Stderr, "  Daily: %s / %s tokens (%.1f%%)\n",
+				formatTokens(dailyTokens), formatTokens(dailyLimit), dailyPercent)
+		}
+	}
+	if monthlyCost, ok := usage["monthly_cost"].(float64); ok {
+		if costLimit, ok2 := usage["monthly_cost_limit"].(float64); ok2 && costLimit > 0 {
+			costPercent, _ := usage["monthly_cost_percent"].(float64)
+			fmt.Fprintf(os.Stderr, "  Monthly spend: $%.2f / $%.2f (%.1f%%)\n", monthlyCost, costLimit, costPercent)
+		}
+	}
+	if dailyCost, ok := usage["daily_cost"].(float64); ok {
+		if costLimit, ok2 := usage["daily_cost_limit"].(float64); ok2 && costLimit > 0 {
+			costPercent, _ := usage["daily_cost_percent"].(float64)
+			fmt.Fprintf(os.Stderr, "  Daily spend: $%.2f / $%.2f (%.1f%%)\n", dailyCost, costLimit, costPercent)
+		}
+	}
 }
 
 func formatTokens(n float64) string {
@@ -1135,20 +1156,9 @@ func printQuotaBlocked(qr *quota.Result) {
 
 	if usage != nil {
 		fmt.Fprintln(os.Stderr, "\nCurrent Usage:")
-		if monthlyTokens, ok := usage["monthly_tokens"].(float64); ok {
-			if monthlyLimit, ok2 := usage["monthly_limit"].(float64); ok2 {
-				monthlyPercent, _ := usage["monthly_percent"].(float64)
-				fmt.Fprintf(os.Stderr, "  Monthly: %s / %s tokens (%.1f%%)\n",
-					formatTokens(monthlyTokens), formatTokens(monthlyLimit), monthlyPercent)
-			}
-		}
-		if dailyTokens, ok := usage["daily_tokens"].(float64); ok {
-			if dailyLimit, ok2 := usage["daily_limit"].(float64); ok2 {
-				dailyPercent, _ := usage["daily_percent"].(float64)
-				fmt.Fprintf(os.Stderr, "  Daily: %s / %s tokens (%.1f%%)\n",
-					formatTokens(dailyTokens), formatTokens(dailyLimit), dailyPercent)
-			}
-		}
+		monthlyPercent, _ := usage["monthly_percent"].(float64)
+		dailyPercent, _ := usage["daily_percent"].(float64)
+		printQuotaUsageLines(usage, monthlyPercent, dailyPercent)
 	}
 
 	if policy != nil {

@@ -316,6 +316,23 @@ def _build_usage_entry(item, current_date):
     }
 
 
+def _monthly_usage_percent(usage, policy):
+    """Percent of the governing monthly allowance used.
+
+    Token limits govern when set; in cost mode they are 0 and the dollar
+    budget governs instead. The summary stats previously used the token
+    limit unconditionally, so cost-mode runs always reported 0 users over
+    threshold no matter the spend.
+    """
+    monthly_limit = policy.get("monthly_token_limit", 0) or 0
+    if monthly_limit > 0:
+        return (usage.get("total_tokens", 0) / monthly_limit) * 100
+    cost_limit = float(policy.get("monthly_cost_limit", 0) or 0)
+    if cost_limit > 0:
+        return (usage.get("monthly_cost", 0) / cost_limit) * 100
+    return 0
+
+
 def lambda_handler(event, context):
     """Fetch usage from PromQL, update DynamoDB, check quotas, send alerts."""
     print(f"Starting quota monitoring at {datetime.now(timezone.utc).isoformat()}")
@@ -392,14 +409,17 @@ def lambda_handler(event, context):
                 monthly_cost=usage.get("monthly_cost", 0), daily_cost=usage.get("daily_cost", 0),
             )
 
-            monthly_pct = (total_tokens / policy["monthly_token_limit"]) * 100 if policy["monthly_token_limit"] > 0 else 0
+            monthly_pct = _monthly_usage_percent(usage, policy)
             if monthly_pct > 100:
                 stats["exceeded"] += 1
             elif monthly_pct > 90:
                 stats["over_90"] += 1
             elif monthly_pct > 80:
                 stats["over_80"] += 1
-            if policy.get("daily_token_limit") and daily_tokens > policy["daily_token_limit"]:
+            daily_cost_limit = float(policy.get("daily_cost_limit", 0) or 0)
+            if (policy.get("daily_token_limit") and daily_tokens > policy["daily_token_limit"]) or (
+                daily_cost_limit > 0 and usage.get("daily_cost", 0) > daily_cost_limit
+            ):
                 stats["daily_exceeded"] += 1
 
             for alert in alerts:

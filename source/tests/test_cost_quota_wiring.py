@@ -261,3 +261,70 @@ class TestQuotaMonitorCostAlerts:
         assert entry["daily_cost"] == 0, "stale-day guard must reset the daily cost counter"
         entry_today = mod._build_usage_entry({**item, "daily_date": "2026-07-13"}, "2026-07-13")
         assert entry_today["daily_cost"] == 7.5
+
+
+class TestCostUsageSummary:
+    """quota_check must report cost data in the usage summary.
+
+    Regression: build_usage_summary was token-only. In cost mode (token
+    limits 0) monthly_percent was always 0, so the credential helpers never
+    showed the 80/90% warning and a blocked user saw "0 / 0 tokens".
+    """
+
+    ENV = {"MONTHLY_TOKEN_LIMIT": "0", "MONTHLY_COST_LIMIT_USD": "50", "DAILY_COST_LIMIT_USD": "5"}
+
+    def _summary(self, usage_overrides=None):
+        mod = _load_lambda("quota_check", self.ENV)
+        policy = mod.resolve_quota_for_user("user@example.gov", [])
+        usage = {
+            "total_tokens": 12_000_000,
+            "daily_tokens": 400_000,
+            "estimated_cost": 42.5,
+            "daily_cost_usd": 3.1,
+        }
+        usage.update(usage_overrides or {})
+        return mod.build_usage_summary(usage, policy)
+
+    def test_cost_fields_present(self):
+        summary = self._summary()
+        assert summary["monthly_cost"] == 42.5
+        assert summary["monthly_cost_limit"] == 50.0
+        assert summary["monthly_cost_percent"] == 85.0
+        assert summary["daily_cost"] == 3.1
+        assert summary["daily_cost_limit"] == 5.0
+        assert summary["daily_cost_percent"] == 62.0
+
+    def test_generic_percent_aliased_to_cost_in_cost_mode(self):
+        """The helpers' 80/90% warning displays read monthly_percent/daily_percent."""
+        summary = self._summary()
+        assert summary["monthly_percent"] == 85.0
+        assert summary["daily_percent"] == 62.0
+
+    def test_token_mode_percent_not_aliased(self):
+        mod = _load_lambda("quota_check", {"MONTHLY_TOKEN_LIMIT": "40000000", "MONTHLY_COST_LIMIT_USD": "0"})
+        policy = mod.resolve_quota_for_user("user@example.gov", [])
+        summary = mod.build_usage_summary({"total_tokens": 10_000_000, "daily_tokens": 0}, policy)
+        assert summary["monthly_percent"] == 25.0
+        assert "monthly_cost_limit" not in summary
+        # Spend is still reported (0 with no usage data) for visibility
+        assert summary["monthly_cost"] == 0
+
+
+class TestMonitorStatsCostMode:
+    """quota_monitor summary stats must use the governing (cost) limit."""
+
+    def test_monthly_percent_uses_cost_when_token_limit_zero(self):
+        mod = _load_lambda("quota_monitor", {"MONTHLY_TOKEN_LIMIT": "0", "MONTHLY_COST_LIMIT_USD": "50"})
+        policy = {"monthly_token_limit": 0, "monthly_cost_limit": 50.0}
+        usage = {"total_tokens": 12_000_000, "monthly_cost": 46.0}
+        assert mod._monthly_usage_percent(usage, policy) == 92.0
+
+    def test_monthly_percent_prefers_token_limit_when_set(self):
+        mod = _load_lambda("quota_monitor", {"MONTHLY_TOKEN_LIMIT": "40000000"})
+        policy = {"monthly_token_limit": 40_000_000, "monthly_cost_limit": 50.0}
+        usage = {"total_tokens": 10_000_000, "monthly_cost": 46.0}
+        assert mod._monthly_usage_percent(usage, policy) == 25.0
+
+    def test_monthly_percent_zero_when_no_limits(self):
+        mod = _load_lambda("quota_monitor", {"MONTHLY_TOKEN_LIMIT": "0"})
+        assert mod._monthly_usage_percent({"total_tokens": 5}, {"monthly_token_limit": 0}) == 0
