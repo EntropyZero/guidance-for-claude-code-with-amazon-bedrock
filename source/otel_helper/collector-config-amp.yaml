@@ -49,11 +49,7 @@ processors:
       - key: department
         from_context: metadata.x-department
         action: upsert
-      # Published as "team" (NOT team.id): team.id is deployment-owned — set
-      # statically via OTEL_RESOURCE_ATTRIBUTES at packaging time — and an
-      # upsert from the claim-derived header would clobber it. The claim value
-      # gets its own key so both are visible (Prometheus labels team / team_id).
-      - key: team
+      - key: team.id
         from_context: metadata.x-team-id
         action: upsert
       - key: cost_center
@@ -104,12 +100,8 @@ exporters:
         metric_name_selectors: [".*"]
       - dimensions: [[team.id, OTelLib]]
         metric_name_selectors: [".*"]
-      # Claim-derived team (x-team-id header, published as "team" so the
-      # deployment-owned static team.id above isn't clobbered).
-      - dimensions: [[team, OTelLib]]
-        metric_name_selectors: ["claude_code.token.usage", "claude_code.cost.usage"]
-      # role carries the user's IdP group (helpers fall back to groups[0]) —
-      # powers the Cost by Group dashboard widgets.
+      # role powers the Cost by Group dashboard widgets — deployments point it
+      # at their IdP groups via attribution_map (e.g. claims_sorted:groups).
       - dimensions: [[role, OTelLib]]
         metric_name_selectors: ["claude_code.token.usage", "claude_code.cost.usage"]
       - dimensions: [[organization, OTelLib]]

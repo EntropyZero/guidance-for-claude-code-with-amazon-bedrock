@@ -1114,8 +1114,8 @@
       "type": "prometheus",
       "uid": "${DS_PROMETHEUS}"
      },
-     "expr": "sum by (team)(increase(claude_code_token_usage[$__interval]))",
-     "legendFormat": "{{team}}"
+     "expr": "sum by (team_id)(increase(claude_code_token_usage[$__interval]))",
+     "legendFormat": "{{team_id}}"
     }
    ]
   },
@@ -1167,8 +1167,8 @@
       "type": "prometheus",
       "uid": "${DS_PROMETHEUS}"
      },
-     "expr": "sum by (team)(increase(claude_code_cost_usage[$__interval]))",
-     "legendFormat": "{{team}}"
+     "expr": "sum by (team_id)(increase(claude_code_cost_usage[$__interval]))",
+     "legendFormat": "{{team_id}}"
     }
    ]
   },
