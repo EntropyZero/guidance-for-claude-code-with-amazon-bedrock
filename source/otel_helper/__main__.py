@@ -175,6 +175,18 @@ def decode_jwt_payload(token):
         return {}
 
 
+def _first_of_list(value):
+    """First non-empty string of an array claim, the value itself when it's a
+    plain string, or "" otherwise (mirrors Go jwt.Claims.GetFirstOfList)."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and item:
+                return item
+    return ""
+
+
 def extract_user_info(payload):
     """Extract user information from JWT claims"""
     # Extract basic user info
@@ -261,8 +273,19 @@ def extract_user_info(payload):
         or payload.get("office")
         or "remote"
     )
+    # Role falls back to the first entry of the "groups" array claim so
+    # group-based cost attribution (dashboards aggregating by role) works for
+    # IdPs that only send group membership as an array (e.g. Okta). Role
+    # carries the group rather than team: team.id is commonly customized per
+    # client deployment via static OTEL_RESOURCE_ATTRIBUTES, and overwriting
+    # it from claims would clobber that. Mirrored in the Go otel extractor.
     role = (
-        payload.get("custom:role") or payload.get("role") or payload.get("job_title") or payload.get("title") or "user"
+        payload.get("custom:role")
+        or payload.get("role")
+        or payload.get("job_title")
+        or payload.get("title")
+        or _first_of_list(payload.get("groups"))
+        or "user"
     )
 
     # AWS Session Tags — generic extraction from https://aws.amazon.com/tags claim.

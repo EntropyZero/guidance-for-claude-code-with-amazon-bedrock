@@ -143,11 +143,21 @@ func ExtractUserInfoWithTagKey(claims jwt.Claims, tagKey string) UserInfo {
 		info.Location = "remote"
 	}
 
-	// Role
+	// Role. Falls back to the first entry of the "groups" array claim so
+	// group-based cost attribution (dashboards aggregating by role) works for
+	// IdPs that only send group membership as an array (e.g. Okta's groups
+	// claim). Role carries the group rather than team: team.id is commonly
+	// customized per client deployment via static OTEL_RESOURCE_ATTRIBUTES,
+	// and overwriting it from claims would clobber that. Multi-group users
+	// are attributed to their first-listed group — a metric dimension can
+	// only carry one value without double-counting cost (the quota Lambdas'
+	// most-restrictive-group selection is a separate, enforcement-side
+	// concept). Mirrored in the Python otel_helper — keep in sync.
 	info.Role = firstNonEmpty(
 		claims.GetString("role"),
 		claims.GetString("job_title"),
 		claims.GetString("title"),
+		claims.GetFirstOfList("groups"),
 	)
 	if info.Role == "" {
 		info.Role = "user"

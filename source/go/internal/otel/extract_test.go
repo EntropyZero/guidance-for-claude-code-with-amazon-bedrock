@@ -323,3 +323,53 @@ func TestExtractUserInfoWithTagKey_CustomKeyIgnoresDefaultClaim(t *testing.T) {
 		t.Errorf("Project = %q, want empty (custom key misses should NOT fall back to Project)", info.Project)
 	}
 }
+
+// TestExtractUserInfo_RoleFromGroupsArray verifies the role falls back to the
+// first entry of the "groups" array claim (e.g. Okta) so group-based cost
+// attribution works. Role carries the group (not team): team.id is commonly
+// customized per client deployment via static OTEL_RESOURCE_ATTRIBUTES.
+func TestExtractUserInfo_RoleFromGroupsArray(t *testing.T) {
+	claims := jwt.Claims{
+		"email":  "dev@corp.com",
+		"groups": []interface{}{"engineering", "ai-team"},
+	}
+
+	info := ExtractUserInfo(claims)
+
+	if info.Role != "engineering" {
+		t.Errorf("Role = %q, want engineering (first groups entry)", info.Role)
+	}
+	if info.Team != "default-team" {
+		t.Errorf("Team = %q, want default-team (groups must NOT feed team)", info.Team)
+	}
+}
+
+// TestExtractUserInfo_SingularRoleBeatsGroupsArray keeps the existing claim
+// priority: explicit role/title claims win over the groups array.
+func TestExtractUserInfo_SingularRoleBeatsGroupsArray(t *testing.T) {
+	claims := jwt.Claims{
+		"role":   "developer",
+		"groups": []interface{}{"engineering"},
+	}
+
+	info := ExtractUserInfo(claims)
+
+	if info.Role != "developer" {
+		t.Errorf("Role = %q, want developer (singular claim wins)", info.Role)
+	}
+}
+
+// TestExtractUserInfo_EmptyGroupsArrayFallsBackToDefault covers the empty and
+// non-string array cases.
+func TestExtractUserInfo_EmptyGroupsArrayFallsBackToDefault(t *testing.T) {
+	for name, groups := range map[string]interface{}{
+		"empty":      []interface{}{},
+		"non_string": []interface{}{42, false},
+	} {
+		claims := jwt.Claims{"groups": groups}
+		info := ExtractUserInfo(claims)
+		if info.Role != "user" {
+			t.Errorf("%s: Role = %q, want user", name, info.Role)
+		}
+	}
+}
