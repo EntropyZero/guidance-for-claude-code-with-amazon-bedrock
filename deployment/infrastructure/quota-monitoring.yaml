@@ -71,6 +71,17 @@ Parameters:
     MaxValue: 60
     Description: Lookback window (minutes) for bypass detection - should match the detection schedule
 
+  TelemetryFreshnessMinutes:
+    Type: Number
+    Default: 45
+    MinValue: 15
+    MaxValue: 240
+    Description: >-
+      How old a user's telemetry stamp may be before bypass detection flags
+      them. Must exceed the CloudTrail lookback PLUS the quota monitor's
+      15-minute ingest period, or healthy users are flagged in the phase gap
+      between the two schedules.
+
   QuotaMode:
     Type: String
     Default: 'token'
@@ -398,6 +409,7 @@ Resources:
           SNS_TOPIC_ARN: !Ref QuotaAlertTopic
           METRICS_REGION: !Ref 'AWS::Region'
           LOOKBACK_MINUTES: !Ref BypassDetectionLookbackMinutes
+          TELEMETRY_FRESHNESS_MINUTES: !Ref TelemetryFreshnessMinutes
           CLOUDWATCH_NAMESPACE: 'ClaudeCode/SidecarHealth'
       Code: ./lambda-functions/sidecar_monitor/
 

@@ -18,6 +18,12 @@ QUOTA_TABLE = os.environ.get("QUOTA_TABLE", "UserQuotaMetrics")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
 METRICS_REGION = os.environ.get("METRICS_REGION", os.environ.get("AWS_REGION", "us-east-1"))
 LOOKBACK_MINUTES = int(os.environ.get("LOOKBACK_MINUTES", "15"))
+# Telemetry freshness must be wider than the CloudTrail lookback: last_updated
+# is stamped by quota_monitor on ITS 15-minute schedule, so a healthy user's
+# stamp is legitimately up to (monitor period + ingest lag) old. Comparing
+# against the raw lookback flagged everyone in the unlucky phase between the
+# two schedules. Default: lookback + monitor period + slack.
+TELEMETRY_FRESHNESS_MINUTES = int(os.environ.get("TELEMETRY_FRESHNESS_MINUTES", "45"))
 CLOUDWATCH_NAMESPACE = os.environ.get("CLOUDWATCH_NAMESPACE", "ClaudeCode/SidecarHealth")
 
 quota_table = dynamodb.Table(QUOTA_TABLE)
@@ -113,6 +119,33 @@ def is_reporting_telemetry(email, window_start):
     return ts >= window_start
 
 
+def telemetry_pipeline_healthy(now):
+    """Return True when the quota_monitor ingest pipeline itself is fresh.
+
+    quota_monitor advances a watermark (pk=WATERMARK, sk=PROMQL) after every
+    successful ingest. If that watermark is stale, NOBODY's last_updated can
+    be fresh — flagging users then reports a systemic telemetry outage as a
+    mass sidecar bypass (observed: an AMP credential failure flagged every
+    active user). In that state the run publishes a pipeline metric and
+    skips per-user detection entirely.
+
+    Fail-open on read errors and on a missing watermark (pre-watermark
+    deployments): detection proceeds as before.
+    """
+    try:
+        item = quota_table.get_item(Key={"pk": "WATERMARK", "sk": "PROMQL"}).get("Item")
+    except Exception as e:
+        print(f"Watermark read failed (assuming pipeline healthy): {e}")
+        return True
+    if not item or not item.get("window_end"):
+        return True  # no watermark yet (first run / older monitor) — proceed
+    age_minutes = (now - datetime.fromtimestamp(int(item["window_end"]), tz=timezone.utc)).total_seconds() / 60
+    if age_minutes > TELEMETRY_FRESHNESS_MINUTES:
+        print(f"Telemetry pipeline STALE: watermark is {age_minutes:.0f} min old — skipping per-user detection")
+        return False
+    return True
+
+
 def publish_metrics(stopped_users, active_users):
     """Publish per-user and aggregate sidecar health metrics to CloudWatch."""
     metric_data = [
@@ -174,15 +207,34 @@ def lambda_handler(event, context):
     """Detect users invoking Bedrock without a running OTEL sidecar."""
     now = datetime.now(timezone.utc)
     start_time = now - timedelta(minutes=LOOKBACK_MINUTES)
+    telemetry_window_start = now - timedelta(minutes=TELEMETRY_FRESHNESS_MINUTES)
     print(f"Bypass detection: window {start_time.isoformat()} -> {now.isoformat()}")
+
+    # 0. If the ingest pipeline itself is stale, per-user detection is
+    #    meaningless — report the pipeline, not the users.
+    if not telemetry_pipeline_healthy(now):
+        try:
+            cloudwatch.put_metric_data(
+                Namespace=CLOUDWATCH_NAMESPACE,
+                MetricData=[{
+                    "MetricName": "TelemetryPipelineStale",
+                    "Value": 1.0,
+                    "Unit": "Count",
+                    "Timestamp": now,
+                }],
+            )
+        except Exception as e:
+            print(f"Error publishing pipeline metric: {e}")
+        return {"statusCode": 200, "body": json.dumps({"skipped": "telemetry pipeline stale"})}
 
     # 1. Tamper-proof: who actually called Bedrock (from CloudTrail)
     bedrock_users = get_bedrock_active_users(start_time, now)
 
     # 2. For each active user, check telemetry freshness via a point read.
-    #    Active in Bedrock but not reporting telemetry => sidecar stopped/bypassed.
+    #    Freshness uses the WIDER telemetry window (see
+    #    TELEMETRY_FRESHNESS_MINUTES), not the CloudTrail lookback.
     stopped_users = {
-        email for email in bedrock_users if not is_reporting_telemetry(email, start_time)
+        email for email in bedrock_users if not is_reporting_telemetry(email, telemetry_window_start)
     }
 
     if stopped_users:
