@@ -326,9 +326,9 @@ func TestExtractUserInfoWithTagKey_CustomKeyIgnoresDefaultClaim(t *testing.T) {
 
 // TestExtractUserInfo_RoleFromGroupsArray verifies the role falls back to the
 // first entry of the "groups" array claim (e.g. Okta) so group-based cost
-// attribution works. Role carries the group (not team): team.id is commonly
-// customized per client deployment via static OTEL_RESOURCE_ATTRIBUTES.
+// attribution works. Role carries the group (not team).
 func TestExtractUserInfo_RoleFromGroupsArray(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
 	claims := jwt.Claims{
 		"email":  "dev@corp.com",
 		"groups": []interface{}{"engineering", "ai-team"},
@@ -344,24 +344,64 @@ func TestExtractUserInfo_RoleFromGroupsArray(t *testing.T) {
 	}
 }
 
-// TestExtractUserInfo_SingularRoleBeatsGroupsArray keeps the existing claim
-// priority: explicit role/title claims win over the groups array.
-func TestExtractUserInfo_SingularRoleBeatsGroupsArray(t *testing.T) {
-	claims := jwt.Claims{
-		"role":   "developer",
-		"groups": []interface{}{"engineering"},
+// TestExtractUserInfo_RolePrecedence pins the full role chain:
+// role claim > singular group claim > groups array > static env role.
+func TestExtractUserInfo_RolePrecedence(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "role=static-role")
+
+	cases := []struct {
+		name   string
+		claims jwt.Claims
+		want   string
+	}{
+		{"role_claim_wins", jwt.Claims{"role": "developer", "group": "eng", "groups": []interface{}{"x"}}, "developer"},
+		{"singular_group_beats_array", jwt.Claims{"group": "eng", "groups": []interface{}{"other"}}, "eng"},
+		{"groups_array_beats_env", jwt.Claims{"groups": []interface{}{"ai-team"}}, "ai-team"},
+		{"env_role_when_no_claims", jwt.Claims{}, "static-role"},
 	}
+	for _, tc := range cases {
+		if got := ExtractUserInfo(tc.claims).Role; got != tc.want {
+			t.Errorf("%s: Role = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
 
-	info := ExtractUserInfo(claims)
+// TestExtractUserInfo_TeamPrecedence pins the full team chain:
+// team claim > department claim > static env team > static env team.id.
+// Group membership never feeds team.
+func TestExtractUserInfo_TeamPrecedence(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team=static-team,team.id=static-team-id")
 
-	if info.Role != "developer" {
-		t.Errorf("Role = %q, want developer (singular claim wins)", info.Role)
+	cases := []struct {
+		name   string
+		claims jwt.Claims
+		want   string
+	}{
+		{"team_claim_wins", jwt.Claims{"team": "platform", "department": "cloud"}, "platform"},
+		{"department_beats_env", jwt.Claims{"department": "cloud"}, "cloud"},
+		{"env_team_when_no_claims", jwt.Claims{}, "static-team"},
+		{"group_claims_ignored", jwt.Claims{"group": "eng", "groups": []interface{}{"x"}}, "static-team"},
+	}
+	for _, tc := range cases {
+		if got := ExtractUserInfo(tc.claims).Team; got != tc.want {
+			t.Errorf("%s: Team = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestExtractUserInfo_TeamEnvTeamIDFallback: static team.id is used when
+// static team is absent.
+func TestExtractUserInfo_TeamEnvTeamIDFallback(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=legacy-static")
+	if got := ExtractUserInfo(jwt.Claims{}).Team; got != "legacy-static" {
+		t.Errorf("Team = %q, want legacy-static (env team.id fallback)", got)
 	}
 }
 
 // TestExtractUserInfo_EmptyGroupsArrayFallsBackToDefault covers the empty and
-// non-string array cases.
+// non-string array cases (no env statics set).
 func TestExtractUserInfo_EmptyGroupsArrayFallsBackToDefault(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
 	for name, groups := range map[string]interface{}{
 		"empty":      []interface{}{},
 		"non_string": []interface{}{42, false},
