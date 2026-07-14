@@ -676,6 +676,7 @@ func (a *credentialApp) authenticate() (*oidc.AuthResult, error) {
 		confidential,
 		generic,
 		a.cfg.OIDCPrompt,
+		a.cfg.OIDCAdditionalScopes,
 	)
 }
 

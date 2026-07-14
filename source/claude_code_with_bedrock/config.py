@@ -49,6 +49,11 @@ class Profile:
     okta_auth_server: str = (
         ""  # Okta authorization server ID ("default" for dev/free plans, empty for Org server on paid plans)
     )
+    # Extra OAuth scopes (space-separated) appended to the provider defaults in
+    # the helpers' browser auth request — e.g. "groups" so Okta includes the
+    # groups claim that group-based quota policies match on. Opt-in because
+    # IdPs reject scopes they don't define (Okta Custom AS: invalid_scope).
+    oidc_additional_scopes: str = ""
 
     # Generic OIDC provider configuration (provider_type == "generic")
     # Required when the IdP isn't Okta/Auth0/Azure/Cognito (e.g. PingFederate, Keycloak, ForgeRock).

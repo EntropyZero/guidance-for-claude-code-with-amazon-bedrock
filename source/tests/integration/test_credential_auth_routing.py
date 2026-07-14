@@ -243,3 +243,54 @@ class TestFederationTypeDetection:
         auth._detect_federation_type(config_data)
 
         assert config_data["federation_type"] == "cognito"
+
+
+class TestAdditionalScopes:
+    """oidc_additional_scopes must be appended to the provider default scopes.
+
+    Group-based quota policies match on the JWT groups claim, which Okta only
+    includes when the client requests the "groups" scope. The field is opt-in
+    because IdPs reject scopes they don't define (Okta Custom AS returns
+    invalid_scope for the whole authorization request).
+    """
+
+    def _create_auth(self, config_data):
+        from unittest.mock import patch
+
+        from credential_provider.__main__ import MultiProviderAuth
+
+        with (
+            patch.object(MultiProviderAuth, "_load_config", return_value=config_data),
+            patch.object(MultiProviderAuth, "_init_credential_storage"),
+        ):
+            return MultiProviderAuth(profile="TestProfile")
+
+    def _okta_config(self, **overrides):
+        config = {
+            "provider_domain": "mycompany.okta.com",
+            "client_id": "test-client-id",
+            "identity_pool_id": "us-east-1:pool-id",
+            "okta_auth_server": "",
+            "provider_type": "okta",
+            "aws_region": "us-east-1",
+            "credential_storage": "session",
+        }
+        config.update(overrides)
+        return config
+
+    def test_groups_scope_appended_for_okta(self):
+        auth = self._create_auth(self._okta_config(oidc_additional_scopes="groups"))
+        assert auth.provider_config["scopes"] == "openid profile email groups"
+
+    def test_duplicate_scopes_not_repeated(self):
+        auth = self._create_auth(self._okta_config(oidc_additional_scopes="email groups groups"))
+        assert auth.provider_config["scopes"] == "openid profile email groups"
+
+    def test_no_additional_scopes_keeps_provider_defaults(self):
+        auth = self._create_auth(self._okta_config())
+        assert auth.provider_config["scopes"] == "openid profile email"
+
+    def test_non_string_additional_scopes_ignored(self):
+        """A malformed config value (list, null) must not crash the helper."""
+        auth = self._create_auth(self._okta_config(oidc_additional_scopes=["groups"]))
+        assert auth.provider_config["scopes"] == "openid profile email"

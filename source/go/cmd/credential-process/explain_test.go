@@ -12,13 +12,14 @@ import (
 
 func TestExplainOutputOIDC(t *testing.T) {
 	cfg := &config.ProfileConfig{
-		ProviderDomain:    "company.okta.com",
-		ClientID:          "0oatest123",
-		ProviderType:      "okta",
-		AWSRegion:         "us-west-2",
-		CredentialStorage: "keyring",
-		IdentityPoolName:  "claude-code-pool",
-		QuotaAPIEndpoint:  "https://quota.example.com/check",
+		ProviderDomain:       "company.okta.com",
+		ClientID:             "0oatest123",
+		ProviderType:         "okta",
+		AWSRegion:            "us-west-2",
+		CredentialStorage:    "keyring",
+		IdentityPoolName:     "claude-code-pool",
+		QuotaAPIEndpoint:     "https://quota.example.com/check",
+		OIDCAdditionalScopes: "groups",
 	}
 
 	output := buildExplainOutput("TestProfile", cfg)
@@ -34,6 +35,9 @@ func TestExplainOutputOIDC(t *testing.T) {
 	}
 	if output.Provider.Domain != "company.okta.com" {
 		t.Errorf("expected provider domain 'company.okta.com', got '%s'", output.Provider.Domain)
+	}
+	if output.Provider.AdditionalScopes != "groups" {
+		t.Errorf("expected additional scopes 'groups', got '%s'", output.Provider.AdditionalScopes)
 	}
 	if output.Quota.AuthMethod != "bearer" {
 		t.Errorf("expected quota auth method 'bearer', got '%s'", output.Quota.AuthMethod)

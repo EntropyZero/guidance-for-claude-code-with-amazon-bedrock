@@ -2820,6 +2820,11 @@ RUN pyinstaller \
             config[profile_name]["okta_auth_server_id"] = profile.okta_auth_server
             config[profile_name]["okta_auth_server"] = profile.okta_auth_server
 
+        # Opt-in extra OAuth scopes for the helpers' browser auth request
+        # (e.g. "groups" for group-based quota policies).
+        if getattr(profile, "oidc_additional_scopes", ""):
+            config[profile_name]["oidc_additional_scopes"] = profile.oidc_additional_scopes
+
         # Add selected_model if available
         if hasattr(profile, "selected_model") and profile.selected_model:
             config[profile_name]["selected_model"] = profile.selected_model
