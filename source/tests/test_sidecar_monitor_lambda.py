@@ -246,3 +246,96 @@ class TestLambdaHandler:
 
         # Cleanup
         index.SNS_TOPIC_ARN = None
+
+
+# ---------------------------------------------------------------------------
+# Flakiness fixes: wider freshness window + pipeline-stale guard
+# ---------------------------------------------------------------------------
+
+
+class TestTelemetryFreshnessWindow:
+    """last_updated is stamped on the quota monitor's OWN 15-minute schedule,
+    so freshness must be judged against a wider window than the CloudTrail
+    lookback — the old comparison flagged every healthy user in the phase gap
+    between the two schedules."""
+
+    def setup_method(self):
+        index.quota_table = MagicMock()
+
+    def _stamp(self, minutes_ago):
+        from datetime import datetime, timedelta, timezone
+
+        ts = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat().replace("+00:00", "Z")
+        index.quota_table.get_item.return_value = {"Item": {"last_updated": ts}}
+
+    def test_default_freshness_covers_monitor_period(self):
+        assert index.TELEMETRY_FRESHNESS_MINUTES == 45
+
+    def test_stamp_older_than_lookback_but_fresh_is_reporting(self):
+        """A 20-minute-old stamp is HEALTHY (monitor period + lag), not a bypass."""
+        from datetime import datetime, timedelta, timezone
+
+        self._stamp(20)
+        window_start = datetime.now(timezone.utc) - timedelta(minutes=index.TELEMETRY_FRESHNESS_MINUTES)
+        assert index.is_reporting_telemetry("a@x.com", window_start) is True
+
+    def test_stamp_older_than_freshness_is_not_reporting(self):
+        from datetime import datetime, timedelta, timezone
+
+        self._stamp(60)
+        window_start = datetime.now(timezone.utc) - timedelta(minutes=index.TELEMETRY_FRESHNESS_MINUTES)
+        assert index.is_reporting_telemetry("a@x.com", window_start) is False
+
+
+class TestPipelineStaleGuard:
+    """A stale quota-monitor watermark means NOBODY's stamp can be fresh — a
+    telemetry outage must not be reported as a mass sidecar bypass (observed:
+    an AMP credential failure flagged every active user)."""
+
+    def setup_method(self):
+        index.quota_table = MagicMock()
+
+    def _watermark(self, minutes_ago):
+        from datetime import datetime, timedelta, timezone
+
+        epoch = int((datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).timestamp())
+        index.quota_table.get_item.return_value = {"Item": {"window_end": epoch}}
+
+    def test_fresh_watermark_is_healthy(self):
+        from datetime import datetime, timezone
+
+        self._watermark(10)
+        assert index.telemetry_pipeline_healthy(datetime.now(timezone.utc)) is True
+
+    def test_stale_watermark_is_unhealthy(self):
+        from datetime import datetime, timezone
+
+        self._watermark(120)
+        assert index.telemetry_pipeline_healthy(datetime.now(timezone.utc)) is False
+
+    def test_missing_watermark_proceeds(self):
+        """Pre-watermark deployments must keep detecting (fail-open)."""
+        from datetime import datetime, timezone
+
+        index.quota_table.get_item.return_value = {}
+        assert index.telemetry_pipeline_healthy(datetime.now(timezone.utc)) is True
+
+    def test_stale_pipeline_skips_per_user_detection(self):
+        """lambda_handler must not flag users or alert when the pipeline is stale."""
+        import json as _json
+        from datetime import datetime, timedelta, timezone
+
+        epoch = int((datetime.now(timezone.utc) - timedelta(minutes=120)).timestamp())
+        index.quota_table.get_item.return_value = {"Item": {"window_end": epoch}}
+        index.cloudwatch = MagicMock()
+        index.sns_client = MagicMock()
+        index.cloudtrail = MagicMock()
+
+        result = index.lambda_handler({}, None)
+
+        body = _json.loads(result["body"])
+        assert body == {"skipped": "telemetry pipeline stale"}
+        index.sns_client.publish.assert_not_called()
+        index.cloudtrail.get_paginator.assert_not_called()
+        # The pipeline metric IS published so admins see the real problem
+        assert index.cloudwatch.put_metric_data.called
