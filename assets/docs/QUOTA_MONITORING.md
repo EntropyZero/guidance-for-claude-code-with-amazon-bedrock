@@ -239,6 +239,28 @@ The system automatically extracts group membership from JWT token claims:
 
 Configure your identity provider to include group claims in the JWT tokens issued to users.
 
+**Okta:** the groups claim is only included when the client requests the
+`groups` scope, which the credential helpers do not request by default. Set
+`oidc_additional_scopes` in your profile to opt in, then re-run
+`ccwb package` so the setting reaches end-user machines:
+
+```json
+"oidc_additional_scopes": "groups"
+```
+
+You also need the Okta side configured to serve the claim:
+
+- **Org Authorization Server** (default): set a *Groups claim filter* on the
+  OIDC app integration (Sign On tab → OpenID Connect ID Token).
+- **Custom Authorization Server** (`okta_auth_server` set): define a `groups`
+  claim on the authorization server and either add a `groups` scope or mark
+  the claim "Always include in token". Requesting a scope the server does not
+  define fails the whole sign-in with `invalid_scope` — which is why the
+  helpers only request it when opted in.
+
+Other providers don't use the scope: Azure AD includes groups via the app
+manifest (`groupMembershipClaims`), and Cognito always sends `cognito:groups`.
+
 ## Alert Management
 
 After deployment, subscribe to the SNS topic for notifications:

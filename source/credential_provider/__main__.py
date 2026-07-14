@@ -136,6 +136,19 @@ class MultiProviderAuth:
                 self.provider_config["authorize_endpoint"] = "/oauth2/v1/authorize"
                 self.provider_config["token_endpoint"] = "/oauth2/v1/token"  # nosec B105
 
+        # Opt-in extra OAuth scopes (space-separated) appended to the provider
+        # defaults — e.g. "groups" so Okta includes the groups claim that
+        # group-based quota policies match on. Opt-in because IdPs reject
+        # scopes they don't define (Okta Custom AS returns invalid_scope), so
+        # nothing may be added by default.
+        additional_scopes = self.config.get("oidc_additional_scopes", "")
+        if additional_scopes and isinstance(additional_scopes, str):
+            merged = self.provider_config["scopes"].split()
+            for scope in additional_scopes.split():
+                if scope not in merged:
+                    merged.append(scope)
+            self.provider_config["scopes"] = " ".join(merged)
+
         # OAuth callback port — also used for inter-process locking.
         # Precedence: REDIRECT_PORT env var > config.json redirect_port > default 8400
         env_port = os.getenv("REDIRECT_PORT")

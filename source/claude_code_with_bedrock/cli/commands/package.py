@@ -2786,6 +2786,11 @@ RUN pyinstaller \
         if profile.provider_type == "cognito" and profile.cognito_user_pool_id:
             config[profile_name]["cognito_user_pool_id"] = profile.cognito_user_pool_id
 
+        # Opt-in extra OAuth scopes for the helpers' browser auth request
+        # (e.g. "groups" for group-based quota policies).
+        if getattr(profile, "oidc_additional_scopes", ""):
+            config[profile_name]["oidc_additional_scopes"] = profile.oidc_additional_scopes
+
         # Add selected_model if available
         if hasattr(profile, "selected_model") and profile.selected_model:
             config[profile_name]["selected_model"] = profile.selected_model

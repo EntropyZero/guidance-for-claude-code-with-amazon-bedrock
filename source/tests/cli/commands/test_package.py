@@ -84,6 +84,51 @@ class TestPackageCommandCrossRegion:
             # Should default to 'us'
             assert config["ClaudeCode"]["cross_region_profile"] == "us"
 
+    def test_config_includes_oidc_additional_scopes_when_set(self):
+        """oidc_additional_scopes must ship in config.json so the helpers request them."""
+        command = PackageCommand()
+
+        profile = Profile(
+            name="test",
+            provider_domain="test.okta.com",
+            client_id="test-client-id",
+            credential_storage="keyring",
+            aws_region="us-east-1",
+            identity_pool_name="test-pool",
+            allowed_bedrock_regions=["us-east-1"],
+            monitoring_enabled=False,
+            oidc_additional_scopes="groups",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = command._create_config(Path(tmpdir), profile, "test-identity-pool-id")
+            with open(config_path, encoding="utf-8") as f:
+                config = json.load(f)
+
+        assert config["ClaudeCode"]["oidc_additional_scopes"] == "groups"
+
+    def test_config_omits_oidc_additional_scopes_when_unset(self):
+        """No extra scopes configured → key absent (helpers use provider defaults)."""
+        command = PackageCommand()
+
+        profile = Profile(
+            name="test",
+            provider_domain="test.okta.com",
+            client_id="test-client-id",
+            credential_storage="keyring",
+            aws_region="us-east-1",
+            identity_pool_name="test-pool",
+            allowed_bedrock_regions=["us-east-1"],
+            monitoring_enabled=False,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = command._create_config(Path(tmpdir), profile, "test-identity-pool-id")
+            with open(config_path, encoding="utf-8") as f:
+                config = json.load(f)
+
+        assert "oidc_additional_scopes" not in config["ClaudeCode"]
+
     def test_installer_script_preserves_region(self):
         """Test that installer script correctly extracts region from config."""
         command = PackageCommand()

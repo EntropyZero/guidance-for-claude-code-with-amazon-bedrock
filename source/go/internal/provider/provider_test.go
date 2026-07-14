@@ -220,3 +220,35 @@ func TestGoogle_TokenEndpointIsAbsolute(t *testing.T) {
 		t.Errorf("Google authorize endpoint should be relative, got %q", cfg.AuthorizeEndpoint)
 	}
 }
+
+func TestMergeScopes_AppendsExtraScopes(t *testing.T) {
+	// The profile's opt-in oidc_additional_scopes (e.g. "groups" for
+	// group-based quota policies) must be appended to the provider defaults.
+	got := MergeScopes("openid profile email offline_access", "groups")
+	if got != "openid profile email offline_access groups" {
+		t.Errorf("MergeScopes = %q, want defaults + groups", got)
+	}
+}
+
+func TestMergeScopes_DeduplicatesAndPreservesOrder(t *testing.T) {
+	got := MergeScopes("openid profile email", "email groups groups")
+	if got != "openid profile email groups" {
+		t.Errorf("MergeScopes = %q, want deduped \"openid profile email groups\"", got)
+	}
+}
+
+func TestMergeScopes_EmptyExtraKeepsDefaults(t *testing.T) {
+	// Nothing may be added by default: unknown scopes make some IdPs (Okta
+	// Custom AS) reject the whole authorization request with invalid_scope.
+	got := MergeScopes("openid profile email", "")
+	if got != "openid profile email" {
+		t.Errorf("MergeScopes = %q, want unchanged defaults", got)
+	}
+}
+
+func TestMergeScopes_WhitespaceOnlyExtraKeepsDefaults(t *testing.T) {
+	got := MergeScopes("openid profile email", "   ")
+	if got != "openid profile email" {
+		t.Errorf("MergeScopes = %q, want unchanged defaults", got)
+	}
+}

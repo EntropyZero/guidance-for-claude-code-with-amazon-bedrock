@@ -41,6 +41,13 @@ type ProfileConfig struct {
 	// Okta Custom Authorization Server id. Absent / empty / "default" all
 	// mean "use the default CAS" -- the Go code normalizes these equivalently.
 	OktaAuthServerID string `json:"okta_auth_server_id"`
+
+	// Extra OAuth scopes (space-separated) appended to the provider defaults
+	// during the browser authorization request -- e.g. "groups" so Okta
+	// includes the groups claim that group-based quota policies match on.
+	// Opt-in because IdPs reject scopes they don't define (Okta Custom AS
+	// returns invalid_scope), so nothing may be added by default.
+	OIDCAdditionalScopes string `json:"oidc_additional_scopes,omitempty"`
 	// Per-project cost-attribution opt-in marker. Not required by the binaries
 	// today (header emission is driven by the JWT claim alone), but kept in
 	// config.json so future dimensions like `ccwb test` can report adoption

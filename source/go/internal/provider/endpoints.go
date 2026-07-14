@@ -109,6 +109,25 @@ func ConfigFor(providerType, oktaAuthServerID string) Config {
 	return cfg
 }
 
+// MergeScopes appends space-separated extra scopes to a base scope string,
+// skipping duplicates and preserving order. Used to apply the profile's
+// opt-in oidc_additional_scopes (e.g. "groups" for group-based quota
+// policies) on top of the provider defaults.
+func MergeScopes(base, extra string) string {
+	merged := strings.Fields(base)
+	seen := make(map[string]bool, len(merged))
+	for _, s := range merged {
+		seen[s] = true
+	}
+	for _, s := range strings.Fields(extra) {
+		if !seen[s] {
+			merged = append(merged, s)
+			seen[s] = true
+		}
+	}
+	return strings.Join(merged, " ")
+}
+
 // IsKnown returns true if providerType is a recognized provider.
 func IsKnown(providerType string) bool {
 	_, ok := Configs[providerType]

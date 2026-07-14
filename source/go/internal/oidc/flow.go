@@ -36,11 +36,17 @@ type GenericEndpoints struct {
 //
 // generic carries absolute endpoint URLs for Generic OIDC providers (CyberArk,
 // PingFederate, Keycloak, ForgeRock, etc.). Pass nil for named providers.
-func Authenticate(providerDomain, clientID, providerType, oktaAuthServerID string, redirectPort int, confidential *ConfidentialAuth, generic *GenericEndpoints, oidcPrompt *string) (*AuthResult, error) {
+//
+// additionalScopes is the profile's opt-in oidc_additional_scopes value
+// (space-separated), merged into the provider's default scopes -- e.g.
+// "groups" so Okta includes the groups claim used for group-based quota
+// policies. Pass "" for the provider defaults.
+func Authenticate(providerDomain, clientID, providerType, oktaAuthServerID string, redirectPort int, confidential *ConfidentialAuth, generic *GenericEndpoints, oidcPrompt *string, additionalScopes string) (*AuthResult, error) {
 	provCfg := provider.ConfigFor(providerType, oktaAuthServerID)
 	if provCfg.Name == "" {
 		return nil, fmt.Errorf("unknown provider type: %s", providerType)
 	}
+	scopes := provider.MergeScopes(provCfg.Scopes, additionalScopes)
 
 	// Generate PKCE, state, nonce
 	state, err := GenerateState()
@@ -62,7 +68,7 @@ func Authenticate(providerDomain, clientID, providerType, oktaAuthServerID strin
 	params := url.Values{
 		"client_id":             {clientID},
 		"response_type":        {provCfg.ResponseType},
-		"scope":                {provCfg.Scopes},
+		"scope":                {scopes},
 		"redirect_uri":         {redirectURI},
 		"state":                {state},
 		"nonce":                {nonce},

@@ -47,9 +47,10 @@ type AuthInfo struct {
 
 // ProviderInfo describes the OIDC identity provider (only for OIDC mode).
 type ProviderInfo struct {
-	Type   string `json:"type"`             // "okta" | "azure" | "cognito" | "auth0" | "google" | "generic"
-	Domain string `json:"domain"`
-	Prompt string `json:"prompt,omitempty"` // OIDC prompt parameter
+	Type             string `json:"type"` // "okta" | "azure" | "cognito" | "auth0" | "google" | "generic"
+	Domain           string `json:"domain"`
+	Prompt           string `json:"prompt,omitempty"`            // OIDC prompt parameter
+	AdditionalScopes string `json:"additional_scopes,omitempty"` // oidc_additional_scopes appended to provider defaults
 }
 
 // QuotaInfo describes quota enforcement configuration.
@@ -161,9 +162,10 @@ func buildExplainOutput(profile string, cfg *config.ProfileConfig) ExplainOutput
 			prompt = *cfg.OIDCPrompt
 		}
 		output.Provider = &ProviderInfo{
-			Type:   provType,
-			Domain: cfg.ProviderDomain,
-			Prompt: prompt,
+			Type:             provType,
+			Domain:           cfg.ProviderDomain,
+			Prompt:           prompt,
+			AdditionalScopes: cfg.OIDCAdditionalScopes,
 		}
 	}
 
