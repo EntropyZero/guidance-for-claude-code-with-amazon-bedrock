@@ -2786,6 +2786,12 @@ RUN pyinstaller \
         if profile.provider_type == "cognito" and profile.cognito_user_pool_id:
             config[profile_name]["cognito_user_pool_id"] = profile.cognito_user_pool_id
 
+        # Per-dimension telemetry attribution sources — both helpers read this
+        # to override their legacy hardcoded fallback chains (see Profile
+        # docstring for the source expression syntax).
+        if getattr(profile, "attribution_map", None):
+            config[profile_name]["attribution_map"] = profile.attribution_map
+
         # Add selected_model if available
         if hasattr(profile, "selected_model") and profile.selected_model:
             config[profile_name]["selected_model"] = profile.selected_model

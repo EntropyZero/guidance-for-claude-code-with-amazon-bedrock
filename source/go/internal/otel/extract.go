@@ -3,6 +3,8 @@ package otel
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 
 	"ccwb-go/internal/jwt"
@@ -104,7 +106,7 @@ func ExtractUserInfoWithTagKey(claims jwt.Claims, tagKey string) UserInfo {
 		info.Department = "unspecified"
 	}
 
-	// Team
+	// Team (legacy default chain — deployments override via attribution_map)
 	info.Team = firstNonEmpty(
 		claims.GetString("team"),
 		claims.GetString("team_id"),
@@ -143,21 +145,12 @@ func ExtractUserInfoWithTagKey(claims jwt.Claims, tagKey string) UserInfo {
 		info.Location = "remote"
 	}
 
-	// Role. Falls back to the first entry of the "groups" array claim so
-	// group-based cost attribution (dashboards aggregating by role) works for
-	// IdPs that only send group membership as an array (e.g. Okta's groups
-	// claim). Role carries the group rather than team: team.id is commonly
-	// customized per client deployment via static OTEL_RESOURCE_ATTRIBUTES,
-	// and overwriting it from claims would clobber that. Multi-group users
-	// are attributed to their first-listed group — a metric dimension can
-	// only carry one value without double-counting cost (the quota Lambdas'
-	// most-restrictive-group selection is a separate, enforcement-side
-	// concept). Mirrored in the Python otel_helper — keep in sync.
+	// Role (legacy default chain — deployments override via attribution_map,
+	// e.g. to carry the user's IdP group memberships for cost dashboards)
 	info.Role = firstNonEmpty(
 		claims.GetString("role"),
 		claims.GetString("job_title"),
 		claims.GetString("title"),
-		claims.GetFirstOfList("groups"),
 	)
 	if info.Role == "" {
 		info.Role = "user"
@@ -218,6 +211,117 @@ func ExtractPrincipalTag(claims jwt.Claims, tagKey string) string {
 			if s, ok := v[0].(string); ok {
 				return s
 			}
+		}
+	}
+	return ""
+}
+
+// Attribution dimensions that a deployment may redefine via attribution_map
+// in config.json. Every organization means something different by "role" or
+// "team", so the map lets admins declare which sources feed each dimension
+// instead of relying on the hardcoded legacy chains. Sources are tried in
+// order; the first non-empty value wins; an empty resolution keeps the legacy
+// default so dashboards never lose their bucket.
+//
+// Source expressions:
+//
+//	claim:<name>         string claim (or first entry when the claim is an array)
+//	claims_sorted:<name> alpha-sorted "|"-joined string of an array claim (e.g. groups)
+//	static:<key>         key from the OTEL_RESOURCE_ATTRIBUTES environment variable
+//	literal:<value>      the value verbatim
+//
+// Mirrored in the Python otel_helper (_resolve_attribution_sources) — keep in sync.
+var attributionTargets = map[string]func(*UserInfo) *string{
+	"team.id":      func(i *UserInfo) *string { return &i.Team },
+	"role":         func(i *UserInfo) *string { return &i.Role },
+	"organization": func(i *UserInfo) *string { return &i.OrganizationID },
+	"department":   func(i *UserInfo) *string { return &i.Department },
+	"cost_center":  func(i *UserInfo) *string { return &i.CostCenter },
+}
+
+// ExtractUserInfoWithOptions applies the deployment's attribution_map on top
+// of the legacy default chains. A nil/empty map is exactly
+// ExtractUserInfoWithTagKey — existing deployments are untouched.
+func ExtractUserInfoWithOptions(claims jwt.Claims, tagKey string, attribution map[string][]string) UserInfo {
+	info := ExtractUserInfoWithTagKey(claims, tagKey)
+	for dim, field := range attributionTargets {
+		sources, ok := attribution[dim]
+		if !ok {
+			continue
+		}
+		if v := ResolveAttributionSources(claims, sources); v != "" {
+			*field(&info) = v
+		}
+	}
+	return info
+}
+
+// ResolveAttributionSources evaluates ordered source expressions against the
+// claims (and static environment), returning the first non-empty value.
+func ResolveAttributionSources(claims jwt.Claims, sources []string) string {
+	for _, source := range sources {
+		kind, arg, ok := strings.Cut(source, ":")
+		if !ok {
+			continue
+		}
+		var v string
+		switch kind {
+		case "claim":
+			v = firstNonEmpty(claims.GetString(arg), claims.GetFirstOfList(arg))
+		case "claims_sorted":
+			v = sortedJoinedList(claims, arg)
+		case "static":
+			v = resourceAttrEnv(arg)
+		case "literal":
+			v = arg
+		}
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// sortedJoinedList returns an array claim's string entries alpha-sorted and
+// "|"-joined (e.g. groups ["b","a"] -> "a|b") so multi-group membership maps
+// to one stable, bounded-cardinality dimension value. A plain string claim is
+// returned verbatim.
+func sortedJoinedList(claims jwt.Claims, key string) string {
+	v, ok := claims[key]
+	if !ok {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case []interface{}:
+		var items []string
+		for _, item := range val {
+			if s, ok := item.(string); ok && s != "" {
+				items = append(items, s)
+			}
+		}
+		sort.Strings(items)
+		return strings.Join(items, "|")
+	}
+	return ""
+}
+
+// resourceAttrEnv returns the value of a key from the OTEL_RESOURCE_ATTRIBUTES
+// environment variable ("k=v,k=v" format), or "" when absent. The helpers run
+// inside Claude Code's environment, so the deployment's static resource
+// attributes are visible here and serve as fallbacks BELOW claim-derived
+// values — resolving the precedence at header-generation time instead of
+// relying on collector-side merge semantics.
+func resourceAttrEnv(key string) string {
+	raw := os.Getenv("OTEL_RESOURCE_ATTRIBUTES")
+	if raw == "" {
+		return ""
+	}
+	for _, pair := range strings.Split(raw, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		if ok && strings.TrimSpace(k) == key {
+			return strings.TrimSpace(v)
 		}
 	}
 	return ""

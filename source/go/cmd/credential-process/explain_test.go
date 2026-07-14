@@ -161,3 +161,17 @@ func TestExplainQuotaDisabled(t *testing.T) {
 		t.Errorf("expected empty endpoint, got '%s'", output.Quota.Endpoint)
 	}
 }
+
+func TestExplainOutputAttributionMap(t *testing.T) {
+	cfg := &config.ProfileConfig{
+		ProviderDomain: "company.okta.com",
+		ProviderType:   "okta",
+		AttributionMap: map[string][]string{"role": {"claims_sorted:groups"}},
+	}
+
+	output := buildExplainOutput("TestProfile", cfg)
+
+	if len(output.AttributionMap) != 1 || output.AttributionMap["role"][0] != "claims_sorted:groups" {
+		t.Errorf("AttributionMap = %v, want role -> claims_sorted:groups", output.AttributionMap)
+	}
+}

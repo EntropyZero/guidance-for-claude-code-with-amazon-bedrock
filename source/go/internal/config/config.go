@@ -47,6 +47,14 @@ type ProfileConfig struct {
 	// status without inferring it.
 	ProjectAttributionEnabled bool `json:"project_attribution_enabled"`
 
+	// Per-dimension attribution sources (dimension -> ordered source
+	// expressions like "claim:role", "claims_sorted:groups", "static:team.id").
+	// Overrides the legacy hardcoded fallback chains for team.id / role /
+	// organization / department / cost_center — every organization means
+	// something different by these words. Absent/empty = legacy behavior.
+	// See otel.ResolveAttributionSources for the expression syntax.
+	AttributionMap map[string][]string `json:"attribution_map,omitempty"`
+
 	// AWS session-tag key used for cost attribution. Default "Project" matches
 	// the historical behavior; customers who standardize on a different name
 	// (CostCenter, BillingCode, etc.) override here. Callers resolve absent or

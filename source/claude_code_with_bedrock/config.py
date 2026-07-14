@@ -49,6 +49,14 @@ class Profile:
     okta_auth_server: str = (
         ""  # Okta authorization server ID ("default" for dev/free plans, empty for Org server on paid plans)
     )
+    # Per-dimension telemetry attribution sources (dimension -> ordered source
+    # expressions, e.g. {"role": ["claims_sorted:groups"], "team.id":
+    # ["static:team.id"]}). Overrides the helpers' legacy hardcoded fallback
+    # chains for team.id / role / organization / department / cost_center —
+    # every organization means something different by these words. Sources:
+    # claim:<name>, claims_sorted:<name>, static:<otel-resource-attr-key>,
+    # literal:<value>. Empty = legacy behavior (backward compatible).
+    attribution_map: dict[str, list[str]] = field(default_factory=dict)
 
     # Generic OIDC provider configuration (provider_type == "generic")
     # Required when the IdP isn't Okta/Auth0/Azure/Cognito (e.g. PingFederate, Keycloak, ForgeRock).

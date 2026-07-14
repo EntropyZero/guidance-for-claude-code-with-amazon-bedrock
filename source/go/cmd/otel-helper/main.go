@@ -197,11 +197,15 @@ func run(testMode bool, profile string) int {
 	// file here so this binary keeps working in dev/test where config.json
 	// isn't always wired up.
 	costTagKey := "Project"
-	if cfg, cfgErr := config.LoadProfile(profile); cfgErr == nil && cfg.CostAttributionTagKey != "" {
-		costTagKey = cfg.CostAttributionTagKey
+	var attributionMap map[string][]string
+	if cfg, cfgErr := config.LoadProfile(profile); cfgErr == nil {
+		if cfg.CostAttributionTagKey != "" {
+			costTagKey = cfg.CostAttributionTagKey
+		}
+		attributionMap = cfg.AttributionMap
 	}
 
-	userInfo := otel.ExtractUserInfoWithTagKey(claims, costTagKey)
+	userInfo := otel.ExtractUserInfoWithOptions(claims, costTagKey, attributionMap)
 	headers := otel.FormatHeaders(userInfo)
 
 	if testMode {
