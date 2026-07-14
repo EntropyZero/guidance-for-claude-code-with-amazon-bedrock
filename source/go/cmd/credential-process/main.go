@@ -869,7 +869,7 @@ func (a *credentialApp) saveMonitoringTokenAndHeaders(idToken string, claims map
 	if a.cfg.CostAttributionTagKey != "" {
 		costTagKey = a.cfg.CostAttributionTagKey
 	}
-	userInfo := otel.ExtractUserInfoWithOptions(jwtClaims, costTagKey, a.cfg.AttributionMap)
+	userInfo := otel.ExtractUserInfoWithOptions(jwtClaims, costTagKey, a.cfg.AttributionMap, a.cfg.StaticResourceAttributes)
 	headers := otel.FormatHeaders(userInfo)
 	tokenExp := int64(jwtClaims.GetFloat("exp"))
 	if tokenExp > 0 {

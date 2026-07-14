@@ -198,14 +198,16 @@ func run(testMode bool, profile string) int {
 	// isn't always wired up.
 	costTagKey := "Project"
 	var attributionMap map[string][]string
+	var staticAttrs map[string]string
 	if cfg, cfgErr := config.LoadProfile(profile); cfgErr == nil {
 		if cfg.CostAttributionTagKey != "" {
 			costTagKey = cfg.CostAttributionTagKey
 		}
 		attributionMap = cfg.AttributionMap
+		staticAttrs = cfg.StaticResourceAttributes
 	}
 
-	userInfo := otel.ExtractUserInfoWithOptions(claims, costTagKey, attributionMap)
+	userInfo := otel.ExtractUserInfoWithOptions(claims, costTagKey, attributionMap, staticAttrs)
 	headers := otel.FormatHeaders(userInfo)
 
 	if testMode {

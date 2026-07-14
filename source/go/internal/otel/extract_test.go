@@ -367,7 +367,7 @@ func TestResolveAttributionSources(t *testing.T) {
 		{"malformed_skipped", []string{"nonsense", "claim:role"}, "developer"},
 	}
 	for _, tc := range cases {
-		if got := ResolveAttributionSources(claims, tc.sources); got != tc.want {
+		if got := ResolveAttributionSources(claims, tc.sources, nil); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -388,7 +388,7 @@ func TestExtractUserInfoWithOptions_Overrides(t *testing.T) {
 		"cost_center": {"claim:absent_claim"}, // resolves empty -> legacy kept
 	}
 
-	info := ExtractUserInfoWithOptions(claims, "Project", attribution)
+	info := ExtractUserInfoWithOptions(claims, "Project", attribution, nil)
 
 	if info.Team != "platform-eng" {
 		t.Errorf("Team = %q, want platform-eng (deployment static wins per map)", info.Team)
@@ -407,7 +407,25 @@ func TestExtractUserInfoWithOptions_Overrides(t *testing.T) {
 // TestExtractUserInfoWithOptions_NilMapIsLegacy: nil/empty map == legacy.
 func TestExtractUserInfoWithOptions_NilMapIsLegacy(t *testing.T) {
 	claims := jwt.Claims{"team": "platform"}
-	if got := ExtractUserInfoWithOptions(claims, "Project", nil); got != ExtractUserInfoWithTagKey(claims, "Project") {
+	if got := ExtractUserInfoWithOptions(claims, "Project", nil, nil); got != ExtractUserInfoWithTagKey(claims, "Project") {
 		t.Error("nil attribution map must behave exactly like the legacy extractor")
+	}
+}
+
+// TestResolveAttributionSources_StaticsFromConfig: static: sources read the
+// deployment's static_resource_attributes from config.json FIRST, so they
+// resolve identically whether or not OTEL_RESOURCE_ATTRIBUTES exists in the
+// process environment (credential_process often runs outside Claude Code).
+func TestResolveAttributionSources_StaticsFromConfig(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=env-value")
+	statics := map[string]string{"team.id": "config-value"}
+
+	if got := ResolveAttributionSources(jwt.Claims{}, []string{"static:team.id"}, statics); got != "config-value" {
+		t.Errorf("got %q, want config-value (config.json statics win over env)", got)
+	}
+
+	// Env is the fallback when config.json has no statics (dev/legacy bundles)
+	if got := ResolveAttributionSources(jwt.Claims{}, []string{"static:team.id"}, nil); got != "env-value" {
+		t.Errorf("got %q, want env-value (env fallback)", got)
 	}
 }

@@ -164,14 +164,16 @@ func warmAttributionCache(profile string) {
 	// credential-process binary
 	costTagKey := "Project"
 	var attributionMap map[string][]string
+	var staticAttrs map[string]string
 	if cfgData, cfgErr := config.LoadProfile(profile); cfgErr == nil {
 		if cfgData.CostAttributionTagKey != "" {
 			costTagKey = cfgData.CostAttributionTagKey
 		}
 		attributionMap = cfgData.AttributionMap
+		staticAttrs = cfgData.StaticResourceAttributes
 	}
 
-	userInfo := otel.ExtractUserInfoWithOptions(claims, costTagKey, attributionMap)
+	userInfo := otel.ExtractUserInfoWithOptions(claims, costTagKey, attributionMap, staticAttrs)
 	headers := otel.FormatHeaders(userInfo)
 
 	// Write to cache so subsequent requests pick it up

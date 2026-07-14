@@ -241,15 +241,18 @@ var attributionTargets = map[string]func(*UserInfo) *string{
 
 // ExtractUserInfoWithOptions applies the deployment's attribution_map on top
 // of the legacy default chains. A nil/empty map is exactly
-// ExtractUserInfoWithTagKey — existing deployments are untouched.
-func ExtractUserInfoWithOptions(claims jwt.Claims, tagKey string, attribution map[string][]string) UserInfo {
+// ExtractUserInfoWithTagKey — existing deployments are untouched. statics is
+// the deployment's static_resource_attributes from config.json (static:
+// sources read it first, then the OTEL_RESOURCE_ATTRIBUTES environment
+// variable — credential_process often runs outside Claude Code's env).
+func ExtractUserInfoWithOptions(claims jwt.Claims, tagKey string, attribution map[string][]string, statics map[string]string) UserInfo {
 	info := ExtractUserInfoWithTagKey(claims, tagKey)
 	for dim, field := range attributionTargets {
 		sources, ok := attribution[dim]
 		if !ok {
 			continue
 		}
-		if v := ResolveAttributionSources(claims, sources); v != "" {
+		if v := ResolveAttributionSources(claims, sources, statics); v != "" {
 			*field(&info) = v
 		}
 	}
@@ -257,8 +260,8 @@ func ExtractUserInfoWithOptions(claims jwt.Claims, tagKey string, attribution ma
 }
 
 // ResolveAttributionSources evaluates ordered source expressions against the
-// claims (and static environment), returning the first non-empty value.
-func ResolveAttributionSources(claims jwt.Claims, sources []string) string {
+// claims and static attributes, returning the first non-empty value.
+func ResolveAttributionSources(claims jwt.Claims, sources []string, statics map[string]string) string {
 	for _, source := range sources {
 		kind, arg, ok := strings.Cut(source, ":")
 		if !ok {
@@ -271,7 +274,7 @@ func ResolveAttributionSources(claims jwt.Claims, sources []string) string {
 		case "claims_sorted":
 			v = sortedJoinedList(claims, arg)
 		case "static":
-			v = resourceAttrEnv(arg)
+			v = firstNonEmpty(statics[arg], resourceAttrEnv(arg))
 		case "literal":
 			v = arg
 		}

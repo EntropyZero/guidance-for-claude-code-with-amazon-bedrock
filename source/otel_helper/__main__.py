@@ -345,8 +345,8 @@ _ATTRIBUTION_DIMENSIONS = {
 }
 
 
-def _load_attribution_map():
-    """attribution_map for the active profile from config.json, or {}.
+def _load_attribution_config():
+    """(attribution_map, static_resource_attributes) from config.json.
 
     Looks next to this script first (installed layout puts config.json in the
     same directory), then in ~/claude-code-with-bedrock/. Any failure means
@@ -357,20 +357,26 @@ def _load_attribution_map():
         cfg = base / "config.json"
         try:
             if cfg.exists():
-                data = json.loads(cfg.read_text(encoding="utf-8"))
-                return data.get(profile, {}).get("attribution_map", {}) or {}
+                data = json.loads(cfg.read_text(encoding="utf-8")).get(profile, {})
+                return (
+                    data.get("attribution_map", {}) or {},
+                    data.get("static_resource_attributes", {}) or {},
+                )
         except Exception as e:
-            logger.debug(f"attribution_map load failed from {cfg}: {e}")
-    return {}
+            logger.debug(f"attribution config load failed from {cfg}: {e}")
+    return {}, {}
 
 
-def _resolve_attribution_sources(payload, sources):
+def _resolve_attribution_sources(payload, sources, statics=None):
     """Evaluate ordered source expressions, returning the first non-empty value.
 
     Source expressions (mirrors Go otel.ResolveAttributionSources — keep in sync):
         claim:<name>         string claim (or first entry of an array claim)
         claims_sorted:<name> alpha-sorted "|"-joined string of an array claim
-        static:<key>         key from the OTEL_RESOURCE_ATTRIBUTES env var
+        static:<key>         deployment static from config.json
+                             (static_resource_attributes), falling back to the
+                             OTEL_RESOURCE_ATTRIBUTES env var — the helper is
+                             often invoked outside Claude Code's environment
         literal:<value>      the value verbatim
     """
     for source in sources or []:
@@ -388,7 +394,7 @@ def _resolve_attribution_sources(payload, sources):
             elif isinstance(raw, list):
                 value = "|".join(sorted(i for i in raw if isinstance(i, str) and i))
         elif kind == "static":
-            value = _resource_attr_env(arg)
+            value = (statics or {}).get(arg, "") or _resource_attr_env(arg)
         elif kind == "literal":
             value = arg
         if value:
@@ -402,10 +408,10 @@ def _apply_attribution_map(payload, attributes):
     An empty resolution keeps the legacy value so dashboards never lose their
     bucket; an absent map is exactly legacy behavior.
     """
-    attribution = _load_attribution_map()
+    attribution, statics = _load_attribution_config()
     for dimension, attr_key in _ATTRIBUTION_DIMENSIONS.items():
         if dimension in attribution:
-            value = _resolve_attribution_sources(payload, attribution[dimension])
+            value = _resolve_attribution_sources(payload, attribution[dimension], statics)
             if value:
                 attributes[attr_key] = value
     return attributes
