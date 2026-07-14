@@ -256,6 +256,35 @@ class TestQuotaMonitorBackends:
         assert not any("ClaudeCoWork" in q for q in calls), "CoWork queries must be skipped on AMP"
 
 
+class TestAmpWorkspaceTemplate:
+    def test_tag_values_use_aps_allowed_charset(self):
+        """APS rejects tag values outside letters/digits/space/_.:/=+-@ —
+        a parenthesized Purpose tag failed workspace creation outright."""
+        template = Path(__file__).resolve().parents[2] / "deployment" / "infrastructure" / "amp-workspace.yaml"
+        import re
+
+        import yaml
+
+        class CFNLoader(yaml.SafeLoader):
+            pass
+
+        def _cfn(loader, suffix, node):  # noqa: ARG001 - yaml constructor signature
+            if isinstance(node, yaml.ScalarNode):
+                return loader.construct_scalar(node)
+            if isinstance(node, yaml.SequenceNode):
+                return loader.construct_sequence(node)
+            return loader.construct_mapping(node)
+
+        CFNLoader.add_multi_constructor("!", _cfn)
+        doc = yaml.load(template.read_text(encoding="utf-8"), Loader=CFNLoader)
+        tags = doc["Resources"]["Workspace"]["Properties"].get("Tags", [])
+        assert tags, "workspace should carry an identifying tag"
+        allowed = re.compile(r"^[\w\s_.:/=+\-@]*$")
+        for tag in tags:
+            for field in ("Key", "Value"):
+                assert allowed.match(tag[field]), f"APS-invalid character in tag {field}: {tag[field]!r}"
+
+
 class TestDashboardTemplateSelection:
     def test_amp_backend_uses_emf_dashboard_template(self):
         """deploy selects the classic-widget dashboard for the AMP backend —

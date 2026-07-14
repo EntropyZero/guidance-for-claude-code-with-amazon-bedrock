@@ -28,7 +28,9 @@ Resources:
         RetentionPeriodInDays: !Ref RetentionPeriodInDays
       Tags:
         - Key: Purpose
-          Value: Claude Code metrics (GovCloud OTLP-alternative backend)
+          # APS rejects parentheses in tag values — the allowed charset is
+          # letters, digits, spaces, and _ . : / = + - @ only.
+          Value: Claude Code metrics - GovCloud OTLP-alternative backend
 
 Outputs:
   WorkspaceId:
