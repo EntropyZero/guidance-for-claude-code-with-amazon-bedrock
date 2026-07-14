@@ -530,3 +530,35 @@ class TestOtelAttributesFlag:
         assert _validate_otel_attributes_string("team.id=") is not None
         assert _validate_otel_attributes_string("=team-a") is not None
         assert _validate_otel_attributes_string("team.id=a,,") is not None
+
+    @patch("claude_code_with_bedrock.cli.commands.package.Config")
+    def test_flag_path_does_not_crash_before_platform_validation(self, mock_config_cls, capsys):
+        """Regression: --otel-attributes raised UnboundLocalError on
+        customize_otel (set only in the prompt branches) before the run ever
+        reached platform validation."""
+        from cleo.testers.application_tester import ApplicationTester
+
+        from claude_code_with_bedrock.cli import create_application
+
+        profile = Profile(
+            name="test",
+            provider_domain="test.okta.com",
+            client_id="test-client-id",
+            credential_storage="keyring",
+            aws_region="us-gov-west-1",
+            identity_pool_name="test-pool",
+            monitoring_enabled=True,
+        )
+        mock_config = MagicMock()
+        mock_config.active_profile = "test"
+        mock_config.get_profile.return_value = profile
+        mock_config_cls.load.return_value = mock_config
+
+        app = create_application()
+        tester = ApplicationTester(app)
+        tester.execute("package --skip-validation --otel-attributes team.id=team-a --target-platform bogus")
+
+        out = capsys.readouterr().out
+        assert tester.status_code == 1  # rejected at platform validation, NOT a crash
+        assert "Bundle telemetry attributes: team.id=team-a" in out
+        assert "Invalid platform" in out
