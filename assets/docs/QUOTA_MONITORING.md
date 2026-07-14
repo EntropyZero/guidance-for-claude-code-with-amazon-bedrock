@@ -265,6 +265,47 @@ You also need the Okta side configured to serve the claim:
 Other providers don't use the scope: Azure AD includes groups via the app
 manifest (`groupMembershipClaims`), and Cognito always sends `cognito:groups`.
 
+### Telemetry Attribution Map (cost dashboards by team/group)
+
+Quota *enforcement* resolves groups from the JWT at check time (above), but
+the cost *dashboards* aggregate metric dimensions — and by default those
+dimensions never see group membership. Every organization also means
+something different by "role" or "team", so the mapping is configurable
+per deployment via the profile's `attribution_map`:
+
+```json
+"attribution_map": {
+  "team.id": ["static:team.id"],
+  "role":    ["claims_sorted:groups"]
+}
+```
+
+Each entry maps a metric dimension to an ordered list of sources; the first
+non-empty value wins, and an empty resolution keeps the built-in default so
+dashboards never lose their bucket. Configurable dimensions: `team.id`,
+`role`, `organization`, `department`, `cost_center`.
+
+| Source expression | Resolves to |
+|---|---|
+| `claim:<name>` | A JWT claim (or the first entry when the claim is an array) |
+| `claims_sorted:<name>` | An array claim, alpha-sorted and `\|`-joined (e.g. `groups` → `ai-team\|engineering`) |
+| `static:<key>` | The deployment's static attributes: `static_resource_attributes` in config.json (written by `ccwb package`), falling back to the `OTEL_RESOURCE_ATTRIBUTES` environment variable |
+| `literal:<value>` | The value verbatim |
+
+Built-in defaults when a dimension is not mapped (claims tried in order,
+then the fallback): `team.id` = `team` → `team_id` → `group` →
+`"default-team"`; `role` = `role` → `job_title` → `title` → `"user"`;
+`department` = `department` → `dept` → `division` → `"unspecified"`;
+`cost_center` = `cost_center` → `costCenter` → `cost_code` → `"general"`;
+`organization` = detected from the token issuer → `"amazon-internal"`.
+
+Set the map in `ccwb init` ("Customize telemetry attribution dimensions?"
+in the monitoring section) or edit the profile directly, then re-run
+`ccwb package` so it ships in config.json. The static values themselves are
+per-bundle: pass `--otel-attributes "team.id=team-a,department=eng"` to
+`ccwb package` to build different installations for different teams
+non-interactively.
+
 ## Alert Management
 
 After deployment, subscribe to the SNS topic for notifications:
