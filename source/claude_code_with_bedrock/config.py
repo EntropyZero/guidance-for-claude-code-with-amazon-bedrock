@@ -54,6 +54,14 @@ class Profile:
     # groups claim that group-based quota policies match on. Opt-in because
     # IdPs reject scopes they don't define (Okta Custom AS: invalid_scope).
     oidc_additional_scopes: str = ""
+    # Per-dimension telemetry attribution sources (dimension -> ordered source
+    # expressions, e.g. {"role": ["claims_sorted:groups"], "team.id":
+    # ["static:team.id"]}). Overrides the helpers' legacy hardcoded fallback
+    # chains for team.id / role / organization / department / cost_center —
+    # every organization means something different by these words. Sources:
+    # claim:<name>, claims_sorted:<name>, static:<otel-resource-attr-key>,
+    # literal:<value>. Empty = legacy behavior (backward compatible).
+    attribution_map: dict[str, list[str]] = field(default_factory=dict)
 
     # Generic OIDC provider configuration (provider_type == "generic")
     # Required when the IdP isn't Okta/Auth0/Azure/Cognito (e.g. PingFederate, Keycloak, ForgeRock).

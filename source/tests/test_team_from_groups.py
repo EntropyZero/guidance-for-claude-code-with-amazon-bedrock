@@ -1,14 +1,13 @@
-# ABOUTME: Tests for team/role attribution precedence (claims > groups array > static env)
-# ABOUTME: Mirrors Go otel extract tests — group-based cost dashboards aggregate by role
+# ABOUTME: Tests for the configurable attribution_map (dimension -> ordered sources)
+# ABOUTME: Mirrors Go otel extract tests — legacy chains unchanged unless a deployment opts in
 
-"""Team/role precedence (parity with Go otel extractor).
+"""Attribution map tests (parity with Go otel extractor).
 
-Role = role claim > singular group claim > groups[0] > static env role > "user"
-Team = team claim > department claim > static env team > env team.id > "default-team"
-
-Group membership feeds ROLE, never team: team is claim-then-deployment-owned
-(static OTEL_RESOURCE_ATTRIBUTES), and the helper resolves the precedence at
-header-generation time since it runs inside Claude Code's environment.
+Legacy defaults are untouched (existing deployments keep working); a
+deployment's attribution_map in config.json redefines what feeds team.id /
+role / organization / department / cost_center. Source expressions:
+claim:<name>, claims_sorted:<name> (alpha-sorted "|"-join), static:<key>
+(OTEL_RESOURCE_ATTRIBUTES), literal:<value>.
 """
 
 import importlib.util
@@ -23,58 +22,80 @@ _spec.loader.exec_module(_module)
 extract_user_info = _module.extract_user_info
 
 
-class TestRolePrecedence:
-    def test_role_claim_wins(self, monkeypatch):
-        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "role=static-role")
-        result = extract_user_info({"role": "developer", "group": "eng", "groups": ["x"]})
-        assert result["role"] == "developer"
+class TestLegacyDefaultChains:
+    def test_group_membership_does_not_feed_role_or_change_team(self, monkeypatch):
+        monkeypatch.setattr(_module, "_load_attribution_map", lambda: {})
+        result = extract_user_info({"email": "dev@corp.com", "group": "eng", "groups": ["engineering"]})
+        assert result["team"] == "eng"  # legacy team -> team_id -> group chain
+        assert result["role"] == "user"  # groups never feed role by default
 
-    def test_singular_group_beats_groups_array(self, monkeypatch):
+
+class TestResolveAttributionSources:
+    def _resolve(self, payload, sources):
+        return _module._resolve_attribution_sources(payload, sources)
+
+    def test_claim(self):
+        assert self._resolve({"role": "developer"}, ["claim:role"]) == "developer"
+
+    def test_claim_first_of_array(self):
+        assert self._resolve({"groups": ["zeta", "alpha"]}, ["claim:groups"]) == "zeta"
+
+    def test_claims_sorted_joins_alpha(self):
+        assert self._resolve({"groups": ["zeta", "alpha", "mid"]}, ["claims_sorted:groups"]) == "alpha|mid|zeta"
+
+    def test_static(self, monkeypatch):
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=platform-eng")
+        assert self._resolve({}, ["static:team.id"]) == "platform-eng"
+
+    def test_literal_and_fallback_order(self, monkeypatch):
         monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
-        result = extract_user_info({"group": "eng", "groups": ["other"]})
-        assert result["role"] == "eng"
+        assert self._resolve({}, ["claim:absent", "static:missing", "literal:last"]) == "last"
 
-    def test_first_groups_entry_used(self, monkeypatch):
-        monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
-        result = extract_user_info({"email": "dev@corp.com", "groups": ["engineering", "ai-team"]})
-        assert result["role"] == "engineering"
-
-    def test_env_role_when_no_claims(self, monkeypatch):
-        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "role=static-role")
-        assert extract_user_info({})["role"] == "static-role"
-
-    def test_default_when_nothing(self, monkeypatch):
-        monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
-        assert extract_user_info({"groups": []})["role"] == "user"
-
-    def test_non_string_groups_entries_skipped(self, monkeypatch):
-        monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
-        assert extract_user_info({"groups": [42, False, "ai-team"]})["role"] == "ai-team"
+    def test_malformed_source_skipped(self):
+        assert self._resolve({"role": "dev"}, ["nonsense", "claim:role"]) == "dev"
 
 
-class TestTeamPrecedence:
-    def test_team_claim_wins(self, monkeypatch):
-        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team=static-team")
-        result = extract_user_info({"team": "platform", "department": "cloud"})
+class TestApplyAttributionMap:
+    def test_overrides_and_empty_resolution_keeps_legacy(self, monkeypatch):
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=platform-eng")
+        monkeypatch.setattr(
+            _module,
+            "_load_attribution_map",
+            lambda: {
+                "team.id": ["static:team.id"],
+                "role": ["claims_sorted:groups"],
+                "cost_center": ["claim:absent_claim"],  # empty -> legacy kept
+            },
+        )
+        result = extract_user_info({"email": "dev@corp.com", "team": "claim-team", "groups": ["zeta", "alpha"]})
+        assert result["team"] == "platform-eng"  # deployment static per map
+        assert result["role"] == "alpha|zeta"  # sorted joined groups
+        assert result["cost_center"] == "general"  # empty resolution -> legacy
+        assert result["department"] == "unspecified"  # unmapped dims untouched
+
+    def test_missing_config_is_legacy(self, monkeypatch):
+        monkeypatch.setattr(_module, "_load_attribution_map", lambda: {})
+        result = extract_user_info({"team": "platform"})
         assert result["team"] == "platform"
+        assert result["role"] == "user"
 
-    def test_department_claim_beats_env(self, monkeypatch):
-        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team=static-team")
-        assert extract_user_info({"department": "cloud"})["team"] == "cloud"
 
-    def test_env_team_when_no_claims(self, monkeypatch):
-        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team=static-team,team.id=legacy")
-        assert extract_user_info({})["team"] == "static-team"
+class TestProfileRoundTrip:
+    def test_attribution_map_round_trips_and_defaults_empty(self):
+        from claude_code_with_bedrock.config import Profile
 
-    def test_env_team_id_fallback(self, monkeypatch):
-        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=legacy-static")
-        assert extract_user_info({})["team"] == "legacy-static"
+        p = Profile(
+            name="t",
+            provider_domain="d",
+            client_id="c",
+            credential_storage="session",
+            aws_region="us-gov-west-1",
+            identity_pool_name="p",
+            attribution_map={"role": ["claims_sorted:groups"], "team.id": ["static:team.id"]},
+        )
+        loaded = Profile.from_dict(p.to_dict())
+        assert loaded.attribution_map == {"role": ["claims_sorted:groups"], "team.id": ["static:team.id"]}
 
-    def test_groups_never_feed_team(self, monkeypatch):
-        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team=static-team")
-        result = extract_user_info({"group": "eng", "groups": ["engineering"]})
-        assert result["team"] == "static-team"
-
-    def test_default_when_nothing(self, monkeypatch):
-        monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
-        assert extract_user_info({})["team"] == "default-team"
+        data = p.to_dict()
+        data.pop("attribution_map")
+        assert Profile.from_dict(data).attribution_map == {}  # old profiles load

@@ -266,18 +266,12 @@ def extract_user_info(payload):
         or payload.get("division")
         or "unspecified"
     )
-    # Team precedence: team claim (team_id synonym) -> department claim ->
-    # static OTEL_RESOURCE_ATTRIBUTES team -> team.id. The singular group
-    # claim and the groups array deliberately do NOT feed team — group
-    # membership belongs to role below, and team stays claim-then-
-    # deployment-owned. Mirrored in the Go otel extractor — keep in sync.
+    # Team (legacy default chain — deployments override via attribution_map)
     team = (
         payload.get("custom:team")
         or payload.get("team")
         or payload.get("team_id")
-        or payload.get("department")
-        or _resource_attr_env("team")
-        or _resource_attr_env("team.id")
+        or payload.get("group")
         or "default-team"
     )
     cost_center = (
@@ -295,21 +289,10 @@ def extract_user_info(payload):
         or payload.get("office")
         or "remote"
     )
-    # Role precedence: role claim (job_title/title synonyms) -> singular
-    # group claim -> first entry of the groups array -> static
-    # OTEL_RESOURCE_ATTRIBUTES role. Role carries the user's IdP group for
-    # group-based cost attribution (dashboards aggregating by role);
-    # multi-group users are attributed to their first-listed group.
-    # Mirrored in the Go otel extractor — keep in sync.
+    # Role (legacy default chain — deployments override via attribution_map,
+    # e.g. to carry the user's IdP group memberships for cost dashboards)
     role = (
-        payload.get("custom:role")
-        or payload.get("role")
-        or payload.get("job_title")
-        or payload.get("title")
-        or payload.get("group")
-        or _first_of_list(payload.get("groups"))
-        or _resource_attr_env("role")
-        or "user"
+        payload.get("custom:role") or payload.get("role") or payload.get("job_title") or payload.get("title") or "user"
     )
 
     # AWS Session Tags — generic extraction from https://aws.amazon.com/tags claim.
@@ -329,7 +312,7 @@ def extract_user_info(payload):
             elif isinstance(value, str) and value:
                 session_tags[key] = value
 
-    return {
+    attributes = {
         "email": email,
         "user_id": user_id,
         "username": username,
@@ -345,6 +328,87 @@ def extract_user_info(payload):
         "issuer": payload.get("iss", ""),
         "subject": payload.get("sub", ""),
     }
+    return _apply_attribution_map(payload, attributes)
+
+
+# Attribution dimensions a deployment may redefine via attribution_map in
+# config.json (dimension -> ordered source expressions). Every organization
+# means something different by "role" or "team", so the map lets admins
+# declare which sources feed each dimension instead of relying on the
+# hardcoded legacy chains above. Mirrors Go otel.attributionTargets.
+_ATTRIBUTION_DIMENSIONS = {
+    "team.id": "team",
+    "role": "role",
+    "organization": "organization_id",
+    "department": "department",
+    "cost_center": "cost_center",
+}
+
+
+def _load_attribution_map():
+    """attribution_map for the active profile from config.json, or {}.
+
+    Looks next to this script first (installed layout puts config.json in the
+    same directory), then in ~/claude-code-with-bedrock/. Any failure means
+    legacy behavior — attribution customization must never break telemetry.
+    """
+    profile = os.environ.get("AWS_PROFILE") or "ClaudeCode"
+    for base in (Path(__file__).resolve().parent, Path.home() / "claude-code-with-bedrock"):
+        cfg = base / "config.json"
+        try:
+            if cfg.exists():
+                data = json.loads(cfg.read_text(encoding="utf-8"))
+                return data.get(profile, {}).get("attribution_map", {}) or {}
+        except Exception as e:
+            logger.debug(f"attribution_map load failed from {cfg}: {e}")
+    return {}
+
+
+def _resolve_attribution_sources(payload, sources):
+    """Evaluate ordered source expressions, returning the first non-empty value.
+
+    Source expressions (mirrors Go otel.ResolveAttributionSources — keep in sync):
+        claim:<name>         string claim (or first entry of an array claim)
+        claims_sorted:<name> alpha-sorted "|"-joined string of an array claim
+        static:<key>         key from the OTEL_RESOURCE_ATTRIBUTES env var
+        literal:<value>      the value verbatim
+    """
+    for source in sources or []:
+        kind, sep, arg = str(source).partition(":")
+        if not sep:
+            continue
+        value = ""
+        if kind == "claim":
+            raw = payload.get(arg)
+            value = raw if isinstance(raw, str) else _first_of_list(raw)
+        elif kind == "claims_sorted":
+            raw = payload.get(arg)
+            if isinstance(raw, str):
+                value = raw
+            elif isinstance(raw, list):
+                value = "|".join(sorted(i for i in raw if isinstance(i, str) and i))
+        elif kind == "static":
+            value = _resource_attr_env(arg)
+        elif kind == "literal":
+            value = arg
+        if value:
+            return value
+    return ""
+
+
+def _apply_attribution_map(payload, attributes):
+    """Apply the deployment's attribution_map on top of the legacy defaults.
+
+    An empty resolution keeps the legacy value so dashboards never lose their
+    bucket; an absent map is exactly legacy behavior.
+    """
+    attribution = _load_attribution_map()
+    for dimension, attr_key in _ATTRIBUTION_DIMENSIONS.items():
+        if dimension in attribution:
+            value = _resolve_attribution_sources(payload, attribution[dimension])
+            if value:
+                attributes[attr_key] = value
+    return attributes
 
 
 def format_as_headers_dict(attributes):

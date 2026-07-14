@@ -2825,6 +2825,12 @@ RUN pyinstaller \
         if getattr(profile, "oidc_additional_scopes", ""):
             config[profile_name]["oidc_additional_scopes"] = profile.oidc_additional_scopes
 
+        # Per-dimension telemetry attribution sources — both helpers read this
+        # to override their legacy hardcoded fallback chains (see Profile
+        # docstring for the source expression syntax).
+        if getattr(profile, "attribution_map", None):
+            config[profile_name]["attribution_map"] = profile.attribution_map
+
         # Add selected_model if available
         if hasattr(profile, "selected_model") and profile.selected_model:
             config[profile_name]["selected_model"] = profile.selected_model

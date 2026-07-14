@@ -9,17 +9,17 @@ import (
 
 func TestExtractUserInfo_AllFields(t *testing.T) {
 	claims := jwt.Claims{
-		"email":              "user@example.com",
-		"sub":                "user-id-123",
-		"cognito:username":   "jdoe",
-		"iss":                "https://dev-12345.okta.com",
-		"department":         "engineering",
-		"team":               "platform",
-		"cost_center":        "CC-100",
-		"manager":            "boss@example.com",
-		"location":           "NYC",
-		"role":               "developer",
-		"aud":                "client-id-abc",
+		"email":            "user@example.com",
+		"sub":              "user-id-123",
+		"cognito:username": "jdoe",
+		"iss":              "https://dev-12345.okta.com",
+		"department":       "engineering",
+		"team":             "platform",
+		"cost_center":      "CC-100",
+		"manager":          "boss@example.com",
+		"location":         "NYC",
+		"role":             "developer",
+		"aud":              "client-id-abc",
 	}
 
 	info := ExtractUserInfo(claims)
@@ -324,92 +324,90 @@ func TestExtractUserInfoWithTagKey_CustomKeyIgnoresDefaultClaim(t *testing.T) {
 	}
 }
 
-// TestExtractUserInfo_RoleFromGroupsArray verifies the role falls back to the
-// first entry of the "groups" array claim (e.g. Okta) so group-based cost
-// attribution works. Role carries the group (not team).
-func TestExtractUserInfo_RoleFromGroupsArray(t *testing.T) {
-	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+// TestExtractUserInfo_LegacyDefaultChains pins the backward-compatible
+// defaults: group membership does NOT feed team or role unless a deployment
+// opts in via attribution_map.
+func TestExtractUserInfo_LegacyDefaultChains(t *testing.T) {
 	claims := jwt.Claims{
 		"email":  "dev@corp.com",
+		"group":  "eng",
 		"groups": []interface{}{"engineering", "ai-team"},
 	}
 
 	info := ExtractUserInfo(claims)
 
-	if info.Role != "engineering" {
-		t.Errorf("Role = %q, want engineering (first groups entry)", info.Role)
+	if info.Team != "eng" {
+		t.Errorf("Team = %q, want eng (legacy team->team_id->group chain)", info.Team)
 	}
-	if info.Team != "default-team" {
-		t.Errorf("Team = %q, want default-team (groups must NOT feed team)", info.Team)
+	if info.Role != "user" {
+		t.Errorf("Role = %q, want user (groups must not feed role by default)", info.Role)
 	}
 }
 
-// TestExtractUserInfo_RolePrecedence pins the full role chain:
-// role claim > singular group claim > groups array > static env role.
-func TestExtractUserInfo_RolePrecedence(t *testing.T) {
-	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "role=static-role")
+// TestResolveAttributionSources covers every source expression kind.
+func TestResolveAttributionSources(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=platform-eng,role=static-role")
+	claims := jwt.Claims{
+		"role":   "developer",
+		"groups": []interface{}{"zeta", "alpha", "mid"},
+	}
 
 	cases := []struct {
-		name   string
-		claims jwt.Claims
-		want   string
+		name    string
+		sources []string
+		want    string
 	}{
-		{"role_claim_wins", jwt.Claims{"role": "developer", "group": "eng", "groups": []interface{}{"x"}}, "developer"},
-		{"singular_group_beats_array", jwt.Claims{"group": "eng", "groups": []interface{}{"other"}}, "eng"},
-		{"groups_array_beats_env", jwt.Claims{"groups": []interface{}{"ai-team"}}, "ai-team"},
-		{"env_role_when_no_claims", jwt.Claims{}, "static-role"},
+		{"claim", []string{"claim:role"}, "developer"},
+		{"claim_first_of_array", []string{"claim:groups"}, "zeta"},
+		{"claims_sorted_joins_alpha", []string{"claims_sorted:groups"}, "alpha|mid|zeta"},
+		{"static", []string{"static:team.id"}, "platform-eng"},
+		{"literal", []string{"literal:fixed"}, "fixed"},
+		{"fallback_order", []string{"claim:absent", "static:missing", "literal:last"}, "last"},
+		{"all_empty", []string{"claim:absent", "static:missing"}, ""},
+		{"malformed_skipped", []string{"nonsense", "claim:role"}, "developer"},
 	}
 	for _, tc := range cases {
-		if got := ExtractUserInfo(tc.claims).Role; got != tc.want {
-			t.Errorf("%s: Role = %q, want %q", tc.name, got, tc.want)
+		if got := ResolveAttributionSources(claims, tc.sources); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }
 
-// TestExtractUserInfo_TeamPrecedence pins the full team chain:
-// team claim > department claim > static env team > static env team.id.
-// Group membership never feeds team.
-func TestExtractUserInfo_TeamPrecedence(t *testing.T) {
-	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team=static-team,team.id=static-team-id")
-
-	cases := []struct {
-		name   string
-		claims jwt.Claims
-		want   string
-	}{
-		{"team_claim_wins", jwt.Claims{"team": "platform", "department": "cloud"}, "platform"},
-		{"department_beats_env", jwt.Claims{"department": "cloud"}, "cloud"},
-		{"env_team_when_no_claims", jwt.Claims{}, "static-team"},
-		{"group_claims_ignored", jwt.Claims{"group": "eng", "groups": []interface{}{"x"}}, "static-team"},
+// TestExtractUserInfoWithOptions_Overrides: the map redefines dimensions; an
+// empty resolution keeps the legacy default so dashboards keep their bucket.
+func TestExtractUserInfoWithOptions_Overrides(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=platform-eng")
+	claims := jwt.Claims{
+		"email":  "dev@corp.com",
+		"team":   "claim-team",
+		"groups": []interface{}{"zeta", "alpha"},
 	}
-	for _, tc := range cases {
-		if got := ExtractUserInfo(tc.claims).Team; got != tc.want {
-			t.Errorf("%s: Team = %q, want %q", tc.name, got, tc.want)
-		}
+	attribution := map[string][]string{
+		"team.id":     {"static:team.id"},
+		"role":        {"claims_sorted:groups"},
+		"cost_center": {"claim:absent_claim"}, // resolves empty -> legacy kept
+	}
+
+	info := ExtractUserInfoWithOptions(claims, "Project", attribution)
+
+	if info.Team != "platform-eng" {
+		t.Errorf("Team = %q, want platform-eng (deployment static wins per map)", info.Team)
+	}
+	if info.Role != "alpha|zeta" {
+		t.Errorf("Role = %q, want alpha|zeta (sorted joined groups)", info.Role)
+	}
+	if info.CostCenter != "general" {
+		t.Errorf("CostCenter = %q, want general (empty resolution keeps legacy)", info.CostCenter)
+	}
+	if info.Department != "unspecified" {
+		t.Errorf("Department = %q, want unspecified (unmapped dims untouched)", info.Department)
 	}
 }
 
-// TestExtractUserInfo_TeamEnvTeamIDFallback: static team.id is used when
-// static team is absent.
-func TestExtractUserInfo_TeamEnvTeamIDFallback(t *testing.T) {
-	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=legacy-static")
-	if got := ExtractUserInfo(jwt.Claims{}).Team; got != "legacy-static" {
-		t.Errorf("Team = %q, want legacy-static (env team.id fallback)", got)
-	}
-}
-
-// TestExtractUserInfo_EmptyGroupsArrayFallsBackToDefault covers the empty and
-// non-string array cases (no env statics set).
-func TestExtractUserInfo_EmptyGroupsArrayFallsBackToDefault(t *testing.T) {
-	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
-	for name, groups := range map[string]interface{}{
-		"empty":      []interface{}{},
-		"non_string": []interface{}{42, false},
-	} {
-		claims := jwt.Claims{"groups": groups}
-		info := ExtractUserInfo(claims)
-		if info.Role != "user" {
-			t.Errorf("%s: Role = %q, want user", name, info.Role)
-		}
+// TestExtractUserInfoWithOptions_NilMapIsLegacy: nil/empty map == legacy.
+func TestExtractUserInfoWithOptions_NilMapIsLegacy(t *testing.T) {
+	claims := jwt.Claims{"team": "platform"}
+	if got := ExtractUserInfoWithOptions(claims, "Project", nil); got != ExtractUserInfoWithTagKey(claims, "Project") {
+		t.Error("nil attribution map must behave exactly like the legacy extractor")
 	}
 }

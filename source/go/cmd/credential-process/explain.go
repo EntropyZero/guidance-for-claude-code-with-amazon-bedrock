@@ -18,18 +18,22 @@ import (
 
 // ExplainOutput is the structured JSON output for --explain.
 type ExplainOutput struct {
-	Version    string          `json:"version"`
-	Commit     string          `json:"commit"`
-	Profile    string          `json:"profile"`
-	Platform   PlatformInfo    `json:"platform"`
-	Auth       AuthInfo        `json:"auth"`
-	Provider   *ProviderInfo   `json:"provider,omitempty"`
-	Monitoring MonitoringInfo  `json:"monitoring"`
-	Quota      QuotaInfo       `json:"quota"`
-	Storage    StorageInfo     `json:"storage"`
-	Session    SessionInfo     `json:"session"`
-	Env        EnvInfo         `json:"env"`
-	Paths      PathsInfo       `json:"paths"`
+	Version    string         `json:"version"`
+	Commit     string         `json:"commit"`
+	Profile    string         `json:"profile"`
+	Platform   PlatformInfo   `json:"platform"`
+	Auth       AuthInfo       `json:"auth"`
+	Provider   *ProviderInfo  `json:"provider,omitempty"`
+	Monitoring MonitoringInfo `json:"monitoring"`
+	Quota      QuotaInfo      `json:"quota"`
+	Storage    StorageInfo    `json:"storage"`
+	Session    SessionInfo    `json:"session"`
+	Env        EnvInfo        `json:"env"`
+	Paths      PathsInfo      `json:"paths"`
+	// Per-dimension telemetry attribution sources from config.json (empty =
+	// legacy hardcoded chains). Diagnostic visibility for admins verifying
+	// what feeds team.id / role / organization / department / cost_center.
+	AttributionMap map[string][]string `json:"attribution_map,omitempty"`
 }
 
 // PlatformInfo describes the runtime environment.
@@ -40,8 +44,8 @@ type PlatformInfo struct {
 
 // AuthInfo describes the resolved authentication mode.
 type AuthInfo struct {
-	Mode         string `json:"mode"`          // "oidc" | "idc" | "passthrough"
-	Reason       string `json:"reason"`        // human-readable explanation of why this mode was chosen
+	Mode           string `json:"mode"`                      // "oidc" | "idc" | "passthrough"
+	Reason         string `json:"reason"`                    // human-readable explanation of why this mode was chosen
 	FederationType string `json:"federation_type,omitempty"` // "cognito" | "direct_sts" | ""
 }
 
@@ -55,23 +59,23 @@ type ProviderInfo struct {
 
 // QuotaInfo describes quota enforcement configuration.
 type QuotaInfo struct {
-	Enabled              bool   `json:"enabled"`
-	Endpoint             string `json:"endpoint,omitempty"`
-	FailMode             string `json:"fail_mode"`                         // "open" | "closed"
-	AuthMethod           string `json:"auth_method"`                       // "bearer" | "sigv4"
-	CheckIntervalMin     int    `json:"check_interval_min"`                // Minutes between re-checks
-	CheckTimeoutSec      int    `json:"check_timeout_sec,omitempty"`       // Timeout for quota API call
-	DailyEnforcement     string `json:"daily_enforcement,omitempty"`       // "alert" | "block"
-	MonthlyEnforcement   string `json:"monthly_enforcement,omitempty"`     // "alert" | "block"
-	FineGrained          bool   `json:"fine_grained"`                      // Per-user/group policies in DynamoDB
+	Enabled            bool   `json:"enabled"`
+	Endpoint           string `json:"endpoint,omitempty"`
+	FailMode           string `json:"fail_mode"`                     // "open" | "closed"
+	AuthMethod         string `json:"auth_method"`                   // "bearer" | "sigv4"
+	CheckIntervalMin   int    `json:"check_interval_min"`            // Minutes between re-checks
+	CheckTimeoutSec    int    `json:"check_timeout_sec,omitempty"`   // Timeout for quota API call
+	DailyEnforcement   string `json:"daily_enforcement,omitempty"`   // "alert" | "block"
+	MonthlyEnforcement string `json:"monthly_enforcement,omitempty"` // "alert" | "block"
+	FineGrained        bool   `json:"fine_grained"`                  // Per-user/group policies in DynamoDB
 }
 
 // MonitoringInfo describes telemetry collection configuration.
 type MonitoringInfo struct {
-	Enabled          bool   `json:"enabled"`
-	Mode             string `json:"mode"`                        // "central" | "sidecar" | "none"
-	Endpoint         string `json:"endpoint,omitempty"`          // OTEL collector endpoint
-	ConfigDelivery   string `json:"config_delivery"`             // "static" | "bootstrap"
+	Enabled           bool   `json:"enabled"`
+	Mode              string `json:"mode"`                         // "central" | "sidecar" | "none"
+	Endpoint          string `json:"endpoint,omitempty"`           // OTEL collector endpoint
+	ConfigDelivery    string `json:"config_delivery"`              // "static" | "bootstrap"
 	BootstrapEndpoint string `json:"bootstrap_endpoint,omitempty"` // Lambda URL (if bootstrap)
 }
 
@@ -90,15 +94,15 @@ type SessionInfo struct {
 
 // EnvInfo captures relevant environment variables that override behavior.
 type EnvInfo struct {
-	CCWBProfile       string `json:"ccwb_profile,omitempty"`        // CCWB_PROFILE override
-	AWSProfile        string `json:"aws_profile,omitempty"`         // AWS_PROFILE
-	RedirectPort      string `json:"redirect_port,omitempty"`       // REDIRECT_PORT override
-	DebugEnabled      bool   `json:"debug_enabled"`                 // COGNITO_AUTH_DEBUG=1
-	NoBrowserNotify   bool   `json:"no_browser_notification"`       // CCWB_NO_BROWSER_NOTIFICATION=1
-	IsSSH             bool   `json:"is_ssh"`                        // SSH_CONNECTION detected
-	IsHeadless        bool   `json:"is_headless"`                   // No DISPLAY/WAYLAND_DISPLAY
-	BrowserOverride   string `json:"browser_override,omitempty"`    // $BROWSER env
-	MonitoringToken   bool   `json:"has_monitoring_token"`          // CLAUDE_CODE_MONITORING_TOKEN set
+	CCWBProfile     string `json:"ccwb_profile,omitempty"`     // CCWB_PROFILE override
+	AWSProfile      string `json:"aws_profile,omitempty"`      // AWS_PROFILE
+	RedirectPort    string `json:"redirect_port,omitempty"`    // REDIRECT_PORT override
+	DebugEnabled    bool   `json:"debug_enabled"`              // COGNITO_AUTH_DEBUG=1
+	NoBrowserNotify bool   `json:"no_browser_notification"`    // CCWB_NO_BROWSER_NOTIFICATION=1
+	IsSSH           bool   `json:"is_ssh"`                     // SSH_CONNECTION detected
+	IsHeadless      bool   `json:"is_headless"`                // No DISPLAY/WAYLAND_DISPLAY
+	BrowserOverride string `json:"browser_override,omitempty"` // $BROWSER env
+	MonitoringToken bool   `json:"has_monitoring_token"`       // CLAUDE_CODE_MONITORING_TOKEN set
 }
 
 // PathsInfo shows resolved file paths for troubleshooting.
@@ -135,7 +139,8 @@ func buildExplainOutput(profile string, cfg *config.ProfileConfig) ExplainOutput
 		Storage: StorageInfo{
 			Mode: resolveStorageMode(cfg),
 		},
-		Paths: resolvePaths(profile),
+		Paths:          resolvePaths(profile),
+		AttributionMap: cfg.AttributionMap,
 	}
 
 	// Determine auth mode
