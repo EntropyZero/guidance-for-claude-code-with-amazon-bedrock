@@ -108,3 +108,48 @@ class TestProfileRoundTrip:
         data = p.to_dict()
         data.pop("attribution_map")
         assert Profile.from_dict(data).attribution_map == {}  # old profiles load
+
+
+class TestInitWizardAttribution:
+    """Wizard validator + save/reload round-trip for attribution_map."""
+
+    def test_validator_accepts_valid_sources(self):
+        from claude_code_with_bedrock.cli.commands.init import _validate_attribution_sources
+
+        assert _validate_attribution_sources("claims_sorted:groups") is True
+        assert _validate_attribution_sources("static:team.id, claim:team, literal:fixed") is True
+        assert _validate_attribution_sources("") is True  # blank = keep default
+
+    def test_validator_rejects_typos(self):
+        from claude_code_with_bedrock.cli.commands.init import _validate_attribution_sources
+
+        assert _validate_attribution_sources("claims-sorted:groups") is not True
+        assert _validate_attribution_sources("groups") is not True
+        assert _validate_attribution_sources("claim:") is not True
+
+    def test_rerun_preserves_attribution_map(self):
+        """attribution_map must survive a wizard re-run."""
+        from unittest.mock import patch
+
+        from claude_code_with_bedrock.cli.commands.init import InitCommand
+        from claude_code_with_bedrock.config import Config, Profile
+
+        profile = Profile(
+            name="test",
+            provider_domain="example.okta.com",
+            client_id="0oa1234567890",
+            identity_pool_name="claude-code-auth",
+            credential_storage="keyring",
+            aws_region="us-gov-west-1",
+            attribution_map={"role": ["claims_sorted:groups"], "team.id": ["static:team.id"]},
+        )
+        command = InitCommand()
+        fake_config = Config()
+        with (
+            patch.object(Config, "load", return_value=fake_config),
+            patch.object(fake_config, "get_profile", return_value=profile),
+            patch.object(InitCommand, "_stack_exists", side_effect=Exception("no creds")),
+        ):
+            rebuilt = command._check_existing_deployment("test")
+
+        assert rebuilt["attribution_map"] == {"role": ["claims_sorted:groups"], "team.id": ["static:team.id"]}

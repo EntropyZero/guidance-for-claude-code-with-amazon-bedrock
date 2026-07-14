@@ -80,6 +80,23 @@ def _remember_prior_codebuild_region(config: dict, prior_region: str) -> None:
         priors.append(prior_region)
 
 
+_ATTRIBUTION_SOURCE_KINDS = ("claim", "claims_sorted", "static", "literal")
+
+
+def _validate_attribution_sources(text: str):
+    """questionary validator for comma-separated attribution source expressions.
+
+    Each expression must be kind:value with a known kind — a typo here would
+    otherwise silently resolve to nothing at runtime and the dimension would
+    quietly fall back to its built-in default.
+    """
+    for source in [s.strip() for s in (text or "").split(",") if s.strip()]:
+        kind, sep, arg = source.partition(":")
+        if not sep or kind not in _ATTRIBUTION_SOURCE_KINDS or not arg.strip():
+            return f"Invalid source '{source}' — use kind:value with kind in: {', '.join(_ATTRIBUTION_SOURCE_KINDS)}"
+    return True
+
+
 class InitCommand(Command):
     name = "init"
     description = "Interactive setup wizard for first-time deployment"
@@ -1027,6 +1044,40 @@ class InitCommand(Command):
                     default=config.get("monitoring", {}).get("mode", "sidecar"),
                 ).ask()
                 config["monitoring"]["mode"] = monitoring_mode
+
+                # Telemetry attribution dimensions (advanced, opt-in). Every
+                # organization means something different by "role" or "team" —
+                # the attribution map declares which sources feed each metric
+                # dimension instead of the helpers' built-in fallback chains.
+                existing_attribution = config.get("attribution_map", {}) or {}
+                customize_attribution = questionary.confirm(
+                    "Customize telemetry attribution dimensions? (advanced)",
+                    default=bool(existing_attribution),
+                ).ask()
+                if customize_attribution:
+                    console.print("[dim]Sources (comma-separated, tried in order — first non-empty wins):[/dim]")
+                    console.print("[dim]  claim:<name>          a JWT claim (or first entry of an array claim)[/dim]")
+                    console.print(
+                        "[dim]  claims_sorted:<name>  alpha-sorted '|'-joined array claim (e.g. groups)[/dim]"
+                    )
+                    console.print("[dim]  static:<key>          deployment value from resource attributes[/dim]")
+                    console.print("[dim]  literal:<value>       a fixed value[/dim]")
+                    console.print("[dim]Example — role from IdP groups: claims_sorted:groups[/dim]")
+                    attribution_map = {}
+                    for dimension in ("team.id", "role", "organization", "department", "cost_center"):
+                        answer = questionary.text(
+                            f"Sources for {dimension} (blank = built-in default):",
+                            default=", ".join(existing_attribution.get(dimension, [])),
+                            validate=_validate_attribution_sources,
+                        ).ask()
+                        sources = [s.strip() for s in (answer or "").split(",") if s.strip()]
+                        if sources:
+                            attribution_map[dimension] = sources
+                    config["attribution_map"] = attribution_map
+                    for dimension, sources in attribution_map.items():
+                        console.print(f"  • {dimension}: {' → '.join(sources)}")
+                else:
+                    config["attribution_map"] = existing_attribution
 
                 if monitoring_mode == "central":
                     # Central mode: VPC, HTTPS, analytics configuration
@@ -2843,6 +2894,7 @@ class InitCommand(Command):
             "lock_default_model": config_data.get("lock_default_model", False),
             "tags": config_data.get("tags", {}),
             "redirect_port": config_data.get("redirect_port"),
+            "attribution_map": config_data.get("attribution_map", {}),
             "extra_files": config_data.get("extra_files", []),
         }
 
@@ -3261,6 +3313,11 @@ class InitCommand(Command):
             # Add analytics configuration if present
             if hasattr(profile, "analytics_enabled"):
                 existing_config["analytics"] = {"enabled": profile.analytics_enabled}
+
+            # Telemetry attribution map must survive a wizard re-run (save/reload
+            # parity with the wizard_fields mapping in _save_configuration)
+            if getattr(profile, "attribution_map", None):
+                existing_config["attribution_map"] = profile.attribution_map
 
             # Preserve confidential client configuration if present
             # client_secret is never written to config — it lives in the OS keyring
