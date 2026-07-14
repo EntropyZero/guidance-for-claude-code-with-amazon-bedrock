@@ -87,7 +87,10 @@ exporters:
       - dimensions: [[model, OTelLib]]
         metric_name_selectors: [".*"]
       - dimensions: [[user.email, OTelLib]]
-        metric_name_selectors: ["claude_code.token.usage", "claude_code.cost.usage"]
+        # session.count included so the EMF dashboard's "Sessions by User"
+        # widget has a declared dimension set to query (bounded cardinality:
+        # one series per user).
+        metric_name_selectors: ["claude_code.token.usage", "claude_code.cost.usage", "claude_code.session.count"]
       - dimensions: [[cost_center, OTelLib]]
         metric_name_selectors: ["claude_code.cost.usage", "claude_code.token.usage"]
       - dimensions: [[type, OTelLib]]

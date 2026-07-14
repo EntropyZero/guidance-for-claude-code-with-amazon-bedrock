@@ -4,8 +4,13 @@ Description: 'Claude Code monitoring dashboard over EMF-extracted classic CloudW
   no CloudWatch PromQL support, so the PromQL dashboard (claude-code-dashboard.yaml)
   cannot render there. Widgets use Metrics Insights SQL over the dimension sets the
   collector''s awsemf exporter declares; only declared dimensions are queryable.
-  "Active Users" panels show per-user series (Metrics Insights has no distinct-count),
-  full-cardinality ad-hoc queries live in the AMP workspace (PromQL via Grafana).'
+  All dimension identifiers are double-quoted (Metrics Insights reserves words like
+  "language"), each widget carries at most ONE SQL query (service limit — the cache
+  hit rate uses SEARCH-based metric math instead), and single-value widgets sum over
+  the dashboard time range (sparse metrics like session.count are invisible at the
+  default most-recent-period rendering). "Active Users" panels show per-user series
+  (Metrics Insights has no distinct-count); full-cardinality ad-hoc queries live in
+  the AMP workspace (PromQL via Grafana — see deployment/grafana/).'
 
 Parameters:
   DashboardName:
@@ -29,17 +34,17 @@ Resources:
             {
               "type": "text",
               "x": 0, "y": 0, "width": 24, "height": 2,
-              "properties": { "markdown": "## Overview", "background": "transparent" }
+              "properties": { "markdown": "## Overview (totals over the selected time range)", "background": "transparent" }
             },
             {
               "type": "metric",
               "x": 0, "y": 2, "width": 6, "height": 4,
               "properties": {
                 "title": "Total Tokens Used",
-                "view": "singleValue", "sparkline": true,
+                "view": "singleValue", "setPeriodToTimeRange": true, "sparkline": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "Tokens" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\")", "id": "a", "region": "${MetricsRegion}", "label": "Tokens" } ]
                 ]
               }
             },
@@ -48,10 +53,10 @@ Resources:
               "x": 6, "y": 2, "width": 6, "height": 4,
               "properties": {
                 "title": "Sessions",
-                "view": "singleValue", "sparkline": true,
+                "view": "singleValue", "setPeriodToTimeRange": true, "sparkline": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.session.count\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "Sessions" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.session.count\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\")", "id": "a", "region": "${MetricsRegion}", "label": "Sessions" } ]
                 ]
               }
             },
@@ -60,10 +65,10 @@ Resources:
               "x": 12, "y": 2, "width": 6, "height": 4,
               "properties": {
                 "title": "Estimated Cost (USD)",
-                "view": "singleValue", "sparkline": true,
+                "view": "singleValue", "setPeriodToTimeRange": true, "sparkline": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.cost.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "USD" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.cost.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\")", "id": "a", "region": "${MetricsRegion}", "label": "USD" } ]
                 ]
               }
             },
@@ -72,12 +77,12 @@ Resources:
               "x": 18, "y": 2, "width": 6, "height": 4,
               "properties": {
                 "title": "Cache Hit Rate",
-                "view": "singleValue", "sparkline": true,
+                "view": "singleValue", "setPeriodToTimeRange": true, "sparkline": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, type) WHERE type = 'cacheRead'", "id": "cr", "visible": false, "region": "${MetricsRegion}" } ],
-                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "tot", "visible": false, "region": "${MetricsRegion}" } ],
-                  [ { "expression": "100 * cr / tot", "id": "rate", "label": "%", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SEARCH('{ClaudeCode,OTelLib,type} MetricName=\"claude_code.token.usage\" type=\"cacheRead\"', 'Sum')", "id": "crs", "visible": false, "region": "${MetricsRegion}" } ],
+                  [ { "expression": "SEARCH('{ClaudeCode,OTelLib} MetricName=\"claude_code.token.usage\"', 'Sum')", "id": "tots", "visible": false, "region": "${MetricsRegion}" } ],
+                  [ { "expression": "100 * SUM(crs) / SUM(tots)", "id": "rate", "label": "%", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -94,7 +99,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "Total Tokens" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\")", "id": "a", "region": "${MetricsRegion}", "label": "Total Tokens" } ]
                 ]
               }
             },
@@ -106,7 +111,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, type) GROUP BY type", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"type\") GROUP BY \"type\"", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -118,7 +123,7 @@ Resources:
                 "view": "timeSeries", "stacked": true,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, model) GROUP BY model ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"model\") GROUP BY \"model\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -130,7 +135,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, \"user.email\") GROUP BY \"user.email\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"user.email\") GROUP BY \"user.email\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -142,7 +147,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.cost.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, \"user.email\") GROUP BY \"user.email\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.cost.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"user.email\") GROUP BY \"user.email\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -154,7 +159,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.session.count\") FROM SCHEMA(\"ClaudeCode\", OTelLib, \"user.email\") GROUP BY \"user.email\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.session.count\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"user.email\") GROUP BY \"user.email\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -171,7 +176,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.lines_of_code.count\") FROM SCHEMA(\"ClaudeCode\", OTelLib, type) GROUP BY type", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.lines_of_code.count\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"type\") GROUP BY \"type\"", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -183,7 +188,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.commit.count\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "Commits" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.commit.count\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\")", "id": "a", "region": "${MetricsRegion}", "label": "Commits" } ]
                 ]
               }
             },
@@ -195,7 +200,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.active_time.total\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "s", "visible": false, "region": "${MetricsRegion}" } ],
+                  [ { "expression": "SELECT SUM(\"claude_code.active_time.total\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\")", "id": "s", "visible": false, "region": "${MetricsRegion}" } ],
                   [ { "expression": "s / 3600", "id": "h", "label": "Hours", "region": "${MetricsRegion}" } ]
                 ]
               }
@@ -208,7 +213,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.pull_request.count\") FROM SCHEMA(\"ClaudeCode\", OTelLib)", "id": "a", "region": "${MetricsRegion}", "label": "PRs" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.pull_request.count\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\")", "id": "a", "region": "${MetricsRegion}", "label": "PRs" } ]
                 ]
               }
             },
@@ -217,10 +222,10 @@ Resources:
               "x": 0, "y": 34, "width": 8, "height": 6,
               "properties": {
                 "title": "Code Generation by Language",
-                "view": "pie",
+                "view": "pie", "setPeriodToTimeRange": true,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.code_edit_tool.decision\") FROM SCHEMA(\"ClaudeCode\", OTelLib, language) GROUP BY language ORDER BY SUM() DESC LIMIT 25", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.code_edit_tool.decision\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"language\") GROUP BY \"language\" ORDER BY SUM() DESC LIMIT 25", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -232,7 +237,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.code_edit_tool.decision\") FROM SCHEMA(\"ClaudeCode\", OTelLib, decision) GROUP BY decision", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.code_edit_tool.decision\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"decision\") GROUP BY \"decision\"", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -244,7 +249,7 @@ Resources:
                 "view": "timeSeries", "stacked": false,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.code_edit_tool.decision\") FROM SCHEMA(\"ClaudeCode\", OTelLib, tool_name) GROUP BY tool_name", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.code_edit_tool.decision\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"tool_name\") GROUP BY \"tool_name\"", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -261,7 +266,7 @@ Resources:
                 "view": "timeSeries", "stacked": true,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, department) GROUP BY department ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"department\") GROUP BY \"department\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
@@ -273,7 +278,7 @@ Resources:
                 "view": "timeSeries", "stacked": true,
                 "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
                 "metrics": [
-                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", OTelLib, \"team.id\") GROUP BY \"team.id\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                  [ { "expression": "SELECT SUM(\"claude_code.token.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"team.id\") GROUP BY \"team.id\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
                 ]
               }
             },
