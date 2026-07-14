@@ -386,6 +386,27 @@ def lambda_handler(event, context):
         return {"statusCode": 500, "body": json.dumps(f"Error: {e}")}
 
 
+def _parse_policy_item(item):
+    """Parse one QuotaPolicies item into the policy dict shape.
+
+    Single parser for every scan page — the first page and the
+    LastEvaluatedKey continuation previously had duplicated inline dicts,
+    and the continuation copy silently dropped the cost limit fields, so
+    cost budgets vanished for any policy landing on page 2+ of the scan.
+    """
+    return {
+        "policy_type": item.get("policy_type"), "identifier": item.get("identifier"),
+        "monthly_token_limit": int(item.get("monthly_token_limit", 0)),
+        "daily_token_limit": int(item.get("daily_token_limit", 0)) if item.get("daily_token_limit") else None,
+        "monthly_cost_limit": float(item.get("monthly_cost_limit", 0) or 0),
+        "daily_cost_limit": float(item.get("daily_cost_limit", 0) or 0),
+        "warning_threshold_80": int(item.get("warning_threshold_80", 0)),
+        "warning_threshold_90": int(item.get("warning_threshold_90", 0)),
+        "enforcement_mode": item.get("enforcement_mode", "alert"),
+        "enabled": item.get("enabled", True),
+    }
+
+
 def load_all_policies():
     """Load all quota policies from QuotaPolicies table."""
     policies = {}
@@ -393,34 +414,16 @@ def load_all_policies():
         return policies
     try:
         response = policies_table.scan(FilterExpression=Attr("sk").eq("CURRENT"))
-        for item in response.get("Items", []):
-            pt, ident = item.get("policy_type"), item.get("identifier")
-            if pt and ident:
-                policies[f"{pt}:{ident}"] = {
-                    "policy_type": pt, "identifier": ident,
-                    "monthly_token_limit": int(item.get("monthly_token_limit", 0)),
-                    "daily_token_limit": int(item.get("daily_token_limit", 0)) if item.get("daily_token_limit") else None,
-                    "monthly_cost_limit": float(item.get("monthly_cost_limit", 0) or 0),
-                    "daily_cost_limit": float(item.get("daily_cost_limit", 0) or 0),
-                    "warning_threshold_80": int(item.get("warning_threshold_80", 0)),
-                    "warning_threshold_90": int(item.get("warning_threshold_90", 0)),
-                    "enforcement_mode": item.get("enforcement_mode", "alert"),
-                    "enabled": item.get("enabled", True),
-                }
-        while "LastEvaluatedKey" in response:
-            response = policies_table.scan(FilterExpression=Attr("sk").eq("CURRENT"), ExclusiveStartKey=response["LastEvaluatedKey"])
+        while True:
             for item in response.get("Items", []):
                 pt, ident = item.get("policy_type"), item.get("identifier")
                 if pt and ident:
-                    policies[f"{pt}:{ident}"] = {
-                        "policy_type": pt, "identifier": ident,
-                        "monthly_token_limit": int(item.get("monthly_token_limit", 0)),
-                        "daily_token_limit": int(item.get("daily_token_limit", 0)) if item.get("daily_token_limit") else None,
-                        "warning_threshold_80": int(item.get("warning_threshold_80", 0)),
-                        "warning_threshold_90": int(item.get("warning_threshold_90", 0)),
-                        "enforcement_mode": item.get("enforcement_mode", "alert"),
-                        "enabled": item.get("enabled", True),
-                    }
+                    policies[f"{pt}:{ident}"] = _parse_policy_item(item)
+            if "LastEvaluatedKey" not in response:
+                break
+            response = policies_table.scan(
+                FilterExpression=Attr("sk").eq("CURRENT"), ExclusiveStartKey=response["LastEvaluatedKey"]
+            )
     except Exception as e:
         print(f"Error loading policies: {e}")
     return policies
