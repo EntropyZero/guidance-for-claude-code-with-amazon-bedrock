@@ -323,3 +323,49 @@ func TestExtractUserInfoWithTagKey_CustomKeyIgnoresDefaultClaim(t *testing.T) {
 		t.Errorf("Project = %q, want empty (custom key misses should NOT fall back to Project)", info.Project)
 	}
 }
+
+// TestExtractUserInfo_TeamFromGroupsArray verifies the team falls back to the
+// first entry of the "groups" array claim (e.g. Okta) so group-based cost
+// attribution works when no singular team/group claim is present.
+func TestExtractUserInfo_TeamFromGroupsArray(t *testing.T) {
+	claims := jwt.Claims{
+		"email":  "dev@corp.com",
+		"groups": []interface{}{"engineering", "ai-team"},
+	}
+
+	info := ExtractUserInfo(claims)
+
+	if info.Team != "engineering" {
+		t.Errorf("Team = %q, want engineering (first groups entry)", info.Team)
+	}
+}
+
+// TestExtractUserInfo_SingularTeamBeatsGroupsArray keeps the existing claim
+// priority: an explicit team claim wins over the groups array.
+func TestExtractUserInfo_SingularTeamBeatsGroupsArray(t *testing.T) {
+	claims := jwt.Claims{
+		"team":   "platform",
+		"groups": []interface{}{"engineering"},
+	}
+
+	info := ExtractUserInfo(claims)
+
+	if info.Team != "platform" {
+		t.Errorf("Team = %q, want platform (singular claim wins)", info.Team)
+	}
+}
+
+// TestExtractUserInfo_EmptyGroupsArrayFallsBackToDefault covers the empty and
+// non-string array cases.
+func TestExtractUserInfo_EmptyGroupsArrayFallsBackToDefault(t *testing.T) {
+	for name, groups := range map[string]interface{}{
+		"empty":      []interface{}{},
+		"non_string": []interface{}{42, false},
+	} {
+		claims := jwt.Claims{"groups": groups}
+		info := ExtractUserInfo(claims)
+		if info.Team != "default-team" {
+			t.Errorf("%s: Team = %q, want default-team", name, info.Team)
+		}
+	}
+}
