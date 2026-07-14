@@ -283,13 +283,37 @@ Resources:
               }
             },
             {
+              "type": "metric",
+              "x": 0, "y": 48, "width": 12, "height": 6,
+              "properties": {
+                "title": "Estimated Cost by Team/Group (USD)",
+                "view": "timeSeries", "stacked": true,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.cost.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"team.id\") GROUP BY \"team.id\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 48, "width": 12, "height": 6,
+              "properties": {
+                "title": "Estimated Cost by Department (USD)",
+                "view": "timeSeries", "stacked": true,
+                "region": "${MetricsRegion}", "period": 300, "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SELECT SUM(\"claude_code.cost.usage\") FROM SCHEMA(\"ClaudeCode\", \"OTelLib\", \"department\") GROUP BY \"department\" ORDER BY SUM() DESC LIMIT 100", "id": "a", "region": "${MetricsRegion}" } ]
+                ]
+              }
+            },
+            {
               "type": "text",
-              "x": 0, "y": 48, "width": 24, "height": 2,
+              "x": 0, "y": 54, "width": 24, "height": 2,
               "properties": { "markdown": "## Bedrock API Health", "background": "transparent" }
             },
             {
               "type": "metric",
-              "x": 0, "y": 50, "width": 8, "height": 6,
+              "x": 0, "y": 56, "width": 8, "height": 6,
               "properties": {
                 "metrics": [
                   [ { "expression": "SELECT SUM(InvocationThrottles) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "throttles", "region": "${MetricsRegion}" } ]
@@ -302,7 +326,7 @@ Resources:
             },
             {
               "type": "metric",
-              "x": 8, "y": 50, "width": 8, "height": 6,
+              "x": 8, "y": 56, "width": 8, "height": 6,
               "properties": {
                 "metrics": [
                   [ { "expression": "SELECT SUM(InvocationClientErrors) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "client_errors", "region": "${MetricsRegion}" } ]
@@ -315,7 +339,7 @@ Resources:
             },
             {
               "type": "metric",
-              "x": 16, "y": 50, "width": 8, "height": 6,
+              "x": 16, "y": 56, "width": 8, "height": 6,
               "properties": {
                 "metrics": [
                   [ { "expression": "SELECT SUM(InvocationServerErrors) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "server_errors", "region": "${MetricsRegion}" } ]
