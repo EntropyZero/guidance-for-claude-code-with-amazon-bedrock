@@ -524,23 +524,49 @@ def get_user_usage(email: str) -> dict:
 
 
 def build_usage_summary(usage: dict, policy: dict) -> dict:
-    """Build usage summary with percentages."""
+    """Build usage summary with percentages (token- and cost-denominated).
+
+    Cost data is always included so cost-mode deployments can see spend.
+    When a limit exists only in dollars (cost mode zeroes the token limits),
+    the generic monthly_percent/daily_percent fields are aliased to the cost
+    percentages — the credential helpers drive their 80/90% warning displays
+    off those generic fields, and without the alias cost-mode users got no
+    warning at all before being blocked.
+    """
     monthly_tokens = usage.get("total_tokens", 0)
     daily_tokens = usage.get("daily_tokens", 0)
+    monthly_cost = float(usage.get("estimated_cost", 0))
+    daily_cost = float(usage.get("daily_cost_usd", 0))
 
     monthly_limit = policy.get("monthly_token_limit", 0)
     daily_limit = policy.get("daily_token_limit")
+    monthly_cost_limit = float(policy.get("monthly_cost_limit", 0) or 0)
+    daily_cost_limit = float(policy.get("daily_cost_limit", 0) or 0)
 
     summary = {
         "monthly_tokens": int(monthly_tokens),
         "monthly_limit": monthly_limit,
         "monthly_percent": round(monthly_tokens / monthly_limit * 100, 1) if monthly_limit > 0 else 0,
         "daily_tokens": int(daily_tokens),
+        "monthly_cost": round(monthly_cost, 2),
+        "daily_cost": round(daily_cost, 2),
     }
 
     if daily_limit:
         summary["daily_limit"] = daily_limit
         summary["daily_percent"] = round(daily_tokens / daily_limit * 100, 1) if daily_limit > 0 else 0
+
+    if monthly_cost_limit > 0:
+        summary["monthly_cost_limit"] = monthly_cost_limit
+        summary["monthly_cost_percent"] = round(monthly_cost / monthly_cost_limit * 100, 1)
+        if not monthly_limit:
+            summary["monthly_percent"] = summary["monthly_cost_percent"]
+
+    if daily_cost_limit > 0:
+        summary["daily_cost_limit"] = daily_cost_limit
+        summary["daily_cost_percent"] = round(daily_cost / daily_cost_limit * 100, 1)
+        if not daily_limit:
+            summary["daily_percent"] = summary["daily_cost_percent"]
 
     return summary
 

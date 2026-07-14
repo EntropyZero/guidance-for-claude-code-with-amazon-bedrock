@@ -183,6 +183,23 @@ func buildQuotaHTML(usage map[string]interface{}, message string, isBlocked bool
 	monthlyLimit, _ := usage["monthly_limit"].(float64)
 	dailyTokens, _ := usage["daily_tokens"].(float64)
 	dailyLimit, _ := usage["daily_limit"].(float64)
+	monthlyCost, _ := usage["monthly_cost"].(float64)
+	monthlyCostLimit, _ := usage["monthly_cost_limit"].(float64)
+	dailyCost, _ := usage["daily_cost"].(float64)
+	dailyCostLimit, _ := usage["daily_cost_limit"].(float64)
+
+	// Cost mode: token limits are 0 and the dollar budget governs — render
+	// spend instead of "0 / 0" token counts. The percent fields are already
+	// aliased to the governing cost percentages by the quota API.
+	monthlyValue := fmt.Sprintf("%s / %s", humanizeNumber(int64(monthlyTokens)), humanizeNumber(int64(monthlyLimit)))
+	if monthlyLimit == 0 && monthlyCostLimit > 0 {
+		monthlyValue = fmt.Sprintf("$%.2f / $%.2f", monthlyCost, monthlyCostLimit)
+	}
+	dailyValue := fmt.Sprintf("%s / %s", humanizeNumber(int64(dailyTokens)), humanizeNumber(int64(dailyLimit)))
+	if dailyLimit == 0 && dailyCostLimit > 0 {
+		dailyValue = fmt.Sprintf("$%.2f / $%.2f", dailyCost, dailyCostLimit)
+	}
+	hasDaily := dailyLimit > 0 || dailyCostLimit > 0
 
 	statusEmoji := "⚠️"
 	statusText := "Quota Warning"
@@ -214,19 +231,18 @@ func buildQuotaHTML(usage map[string]interface{}, message string, isBlocked bool
 	}
 
 	var dailySection string
-	if dailyLimit > 0 {
+	if hasDaily {
 		dailySection = fmt.Sprintf(`
 		<div class="usage-section">
 			<div class="usage-label">
 				<span>Daily Usage</span>
-				<span class="usage-value">%s / %s (%.0f%%)</span>
+				<span class="usage-value">%s (%.0f%%)</span>
 			</div>
 			<div class="progress-bar">
 				<div class="progress-fill" style="width: %.0f%%; background: %s;"></div>
 			</div>
 		</div>`,
-			humanizeNumber(int64(dailyTokens)), humanizeNumber(int64(dailyLimit)),
-			dailyPercent, clamp(dailyPercent), barColor(dailyPercent))
+			dailyValue, dailyPercent, clamp(dailyPercent), barColor(dailyPercent))
 	}
 
 	var messageSection string
@@ -261,7 +277,7 @@ func buildQuotaHTML(usage map[string]interface{}, message string, isBlocked bool
         <div class="usage-section">
             <div class="usage-label">
                 <span>Monthly Usage</span>
-                <span class="usage-value">%s / %s (%.0f%%)</span>
+                <span class="usage-value">%s (%.0f%%)</span>
             </div>
             <div class="progress-bar">
                 <div class="progress-fill" style="width: %.0f%%; background: %s;"></div>
@@ -276,7 +292,7 @@ func buildQuotaHTML(usage map[string]interface{}, message string, isBlocked bool
 </html>`,
 		headerBg, statusColor,
 		statusEmoji, statusText,
-		humanizeNumber(int64(monthlyTokens)), humanizeNumber(int64(monthlyLimit)),
+		monthlyValue,
 		monthlyPercent, clamp(monthlyPercent), barColor(monthlyPercent),
 		dailySection, messageSection)
 
