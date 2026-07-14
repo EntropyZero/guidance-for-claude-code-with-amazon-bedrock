@@ -1409,6 +1409,23 @@ class InitCommand(Command):
                     ).ask()
                     config["quota"]["check_interval"] = int(check_interval)
 
+                    # Fail mode: what the credential helper does when the quota
+                    # API is unreachable or errors. Previously only settable by
+                    # hand-editing the saved profile.
+                    console.print("\n[bold]Quota Fail Mode[/bold]")
+                    console.print("What should happen when the quota service cannot be reached?")
+                    console.print("  • [cyan]open[/cyan]: allow access (availability over enforcement)")
+                    console.print("  • [yellow]closed[/yellow]: deny access (enforcement over availability)")
+                    quota_fail_mode = questionary.select(
+                        "Quota fail mode:",
+                        choices=[
+                            questionary.Choice("open (allow when quota service unavailable)", value="open"),
+                            questionary.Choice("closed (deny when quota service unavailable)", value="closed"),
+                        ],
+                        default=config.get("quota", {}).get("fail_mode", "open"),
+                    ).ask()
+                    config["quota"]["fail_mode"] = quota_fail_mode
+
                     # Fine-grained quota policies (per-user/group overrides).
                     # Deploy passes this to the quota stack; without the prompt
                     # the profile field could only be enabled by hand-editing
@@ -1459,6 +1476,7 @@ class InitCommand(Command):
                         console.print(f"  • Daily:   {daily_limit:,} tokens ({daily_enforcement})")
                         console.print(f"  • Burst buffer: {burst_percent}%")
                     console.print(f"  • Re-check interval: {check_interval} minutes")
+                    console.print(f"  • Fail mode: {quota_fail_mode} (when quota service unreachable)")
                     if config["quota"].get("enable_finegrained"):
                         console.print("  • Fine-grained quota policies: enabled")
                     if config["quota"].get("enable_bypass_detection"):
@@ -2820,7 +2838,7 @@ class InitCommand(Command):
         Loads the existing profile (if any) and updates only the fields managed
         by the init wizard. Fields not present in config_data are preserved from
         the existing profile, preventing silent resets of settings like
-        include_coauthored_by, quota_fail_mode, federated_role_arn, etc.
+        include_coauthored_by, federated_role_arn, etc.
 
         Args:
             config_data: Configuration data gathered by the wizard
@@ -2924,6 +2942,7 @@ class InitCommand(Command):
             "daily_cost_limit_usd": config_data.get("quota", {}).get("daily_cost_limit", 0),
             "monthly_enforcement_mode": config_data.get("quota", {}).get("monthly_enforcement_mode", "block"),
             "quota_check_interval": config_data.get("quota", {}).get("check_interval", 30),
+            "quota_fail_mode": config_data.get("quota", {}).get("fail_mode", "open"),
             "enable_finegrained_quotas": config_data.get("quota", {}).get("enable_finegrained", False),
             "enable_bypass_detection": config_data.get("quota", {}).get("enable_bypass_detection", False),
             "cowork_3p_enabled": config_data.get("cowork_3p", {}).get("enabled", True),
@@ -2946,7 +2965,7 @@ class InitCommand(Command):
 
         if existing_profile:
             # Update existing profile — preserves fields not managed by the wizard
-            # (e.g. include_coauthored_by, federated_role_arn, quota_fail_mode,
+            # (e.g. include_coauthored_by, federated_role_arn,
             # otel_collector_endpoint, model_alias, okta_auth_server, etc.)
             for field, value in wizard_fields.items():
                 setattr(existing_profile, field, value)
@@ -3356,6 +3375,7 @@ class InitCommand(Command):
                     "monthly_cost_limit": getattr(profile, "monthly_cost_limit_usd", 0),
                     "daily_cost_limit": getattr(profile, "daily_cost_limit_usd", 0),
                     "check_interval": getattr(profile, "quota_check_interval", 30),
+                    "fail_mode": getattr(profile, "quota_fail_mode", "open"),
                     "enable_finegrained": getattr(profile, "enable_finegrained_quotas", False),
                     "enable_bypass_detection": getattr(profile, "enable_bypass_detection", False),
                 }
