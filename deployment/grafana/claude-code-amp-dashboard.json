@@ -1114,22 +1114,22 @@
       "type": "prometheus",
       "uid": "${DS_PROMETHEUS}"
      },
-     "expr": "sum by (team_id)(increase(claude_code_token_usage[$__interval]))",
-     "legendFormat": "{{team_id}}"
+     "expr": "sum by (team)(increase(claude_code_token_usage[$__interval]))",
+     "legendFormat": "{{team}}"
     }
    ]
   },
   {
    "id": 25,
    "type": "timeseries",
-   "title": "Estimated Cost by Team/Group",
+   "title": "Estimated Cost by Team",
    "datasource": {
     "type": "prometheus",
     "uid": "${DS_PROMETHEUS}"
    },
    "gridPos": {
     "h": 8,
-    "w": 12,
+    "w": 8,
     "x": 0,
     "y": 56
    },
@@ -1167,8 +1167,61 @@
       "type": "prometheus",
       "uid": "${DS_PROMETHEUS}"
      },
-     "expr": "sum by (team_id)(increase(claude_code_cost_usage[$__interval]))",
-     "legendFormat": "{{team_id}}"
+     "expr": "sum by (team)(increase(claude_code_cost_usage[$__interval]))",
+     "legendFormat": "{{team}}"
+    }
+   ]
+  },
+  {
+   "id": 27,
+   "type": "timeseries",
+   "title": "Estimated Cost by Group",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 56
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${DS_PROMETHEUS}"
+     },
+     "expr": "sum by (role)(increase(claude_code_cost_usage[$__interval]))",
+     "legendFormat": "{{role}}"
     }
    ]
   },
@@ -1182,8 +1235,8 @@
    },
    "gridPos": {
     "h": 8,
-    "w": 12,
-    "x": 12,
+    "w": 8,
+    "x": 16,
     "y": 56
    },
    "fieldConfig": {
