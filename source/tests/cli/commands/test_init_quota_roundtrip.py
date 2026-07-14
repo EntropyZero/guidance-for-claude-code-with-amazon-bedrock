@@ -79,3 +79,17 @@ def test_rerun_preserves_all_quota_fields():
     assert quota["monthly_enforcement_mode"] == "alert"
     assert quota["check_interval"] == 5
     assert quota["enable_bypass_detection"] is True
+
+
+def test_rerun_preserves_oidc_additional_scopes():
+    """oidc_additional_scopes must survive the profile -> config rebuild.
+
+    Regression: the wizard prompt (Additional OAuth Scopes) saves the field,
+    but a re-run of init would silently reset it to "" if
+    _check_existing_deployment didn't restore it — dropping the Okta groups
+    scope and breaking group-based quota policies on the next repackage.
+    """
+    profile = _make_profile()
+    profile.oidc_additional_scopes = "groups"
+    rebuilt = _rebuild_config(profile)
+    assert rebuilt["oidc_additional_scopes"] == "groups"
