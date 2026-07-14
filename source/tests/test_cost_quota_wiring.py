@@ -154,6 +154,21 @@ class TestInitRoundTrip:
         quota = self._rebuild(profile)["quota"]
         assert quota["enable_finegrained"] is True
 
+    def test_rerun_preserves_quota_fail_mode(self):
+        """quota_fail_mode must survive a wizard re-run (now wizard-managed)."""
+        profile = Profile(
+            name="test",
+            provider_domain="example.okta.com",
+            client_id="0oa1234567890",
+            identity_pool_name="claude-code-auth",
+            credential_storage="keyring",
+            aws_region="us-gov-west-1",
+            quota_monitoring_enabled=True,
+            quota_fail_mode="closed",
+        )
+        quota = self._rebuild(profile)["quota"]
+        assert quota["fail_mode"] == "closed"
+
 
 def _load_template() -> dict:
     class CFNLoader(yaml.SafeLoader):
