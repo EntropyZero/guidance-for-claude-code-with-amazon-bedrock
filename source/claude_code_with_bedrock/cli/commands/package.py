@@ -200,6 +200,19 @@ def _assert_host_os_can_build_macos() -> None:
     )
 
 
+def _validate_otel_attributes_string(value: str) -> str | None:
+    """Validate a "k=v,k=v" --otel-attributes value; returns an error message or None.
+
+    A malformed pair would otherwise be silently dropped by the settings and
+    config.json writers, and the bundle would ship with default attribution.
+    """
+    for pair in value.split(","):
+        key, sep, val = pair.strip().partition("=")
+        if not sep or not key.strip() or not val.strip():
+            return f"Invalid --otel-attributes pair '{pair.strip()}' — expected key=value (comma-separated)"
+    return None
+
+
 class PackageCommand(Command):
     """
     Build distribution packages for your organization
@@ -254,6 +267,14 @@ class PackageCommand(Command):
             "prepare-offline",
             description="Prepare an offline bundle (OCB binary + Go module cache) for air-gapped builds",
             flag=True,
+        ),
+        option(
+            "otel-attributes",
+            description='Static telemetry attributes for THIS bundle as "k=v,k=v" '
+            '(e.g. "team.id=team-a,department=platform"). Overrides the interactive prompt, '
+            "so different installations can be built for different teams non-interactively.",
+            flag=False,
+            default=None,
         ),
     ]
 
@@ -390,10 +411,22 @@ class PackageCommand(Command):
         else:
             include_coauthored_by = False
 
-        # Prompt for custom OTel resource attributes (only when monitoring is enabled)
+        # Custom OTel resource attributes for this bundle (only when monitoring
+        # is enabled). Per-deployment by design: they are asked/passed on every
+        # package run and baked into that bundle only (settings env + config.json
+        # statics) — build one installation per team by running package once per
+        # team with different --otel-attributes.
         otel_resource_attributes = None
         if profile.monitoring_enabled:
-            if _is_interactive():
+            flag_attrs = self.option("otel-attributes")
+            if flag_attrs:
+                error = _validate_otel_attributes_string(flag_attrs)
+                if error:
+                    console.print(f"[red]{error}[/red]")
+                    return 1
+                otel_resource_attributes = flag_attrs.strip()
+                console.print(f"[dim]Bundle telemetry attributes: {otel_resource_attributes}[/dim]")
+            elif _is_interactive():
                 customize_otel = questionary.confirm(
                     "Customize telemetry resource attributes? (department, team, cost center)",
                     default=False,
@@ -2624,7 +2657,15 @@ RUN pyinstaller \
 
         otel_resource_attributes = None
         if profile.monitoring_enabled:
-            if _is_interactive():
+            flag_attrs = self.option("otel-attributes")
+            if flag_attrs:
+                error = _validate_otel_attributes_string(flag_attrs)
+                if error:
+                    console.print(f"[red]{error}[/red]")
+                    return 1
+                otel_resource_attributes = flag_attrs.strip()
+                customize_otel = False
+            elif _is_interactive():
                 customize_otel = questionary.confirm("Customize telemetry resource attributes?", default=False).ask()
             else:
                 customize_otel = False
