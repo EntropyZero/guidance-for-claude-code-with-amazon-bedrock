@@ -426,6 +426,7 @@ class PackageCommand(Command):
                     return 1
                 otel_resource_attributes = flag_attrs.strip()
                 console.print(f"[dim]Bundle telemetry attributes: {otel_resource_attributes}[/dim]")
+                customize_otel = False
             elif _is_interactive():
                 customize_otel = questionary.confirm(
                     "Customize telemetry resource attributes? (department, team, cost center)",
