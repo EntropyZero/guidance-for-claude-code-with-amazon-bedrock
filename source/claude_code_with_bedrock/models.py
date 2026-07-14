@@ -1426,6 +1426,11 @@ class QuotaPolicy:
     monthly_cost_limit: float = 0.0
     daily_cost_limit: float = 0.0
 
+    # Cost warning thresholds ($). Auto-calculated at 80%/90% of the monthly
+    # budget when not provided — same convention as the token thresholds.
+    cost_warning_threshold_80: float | None = None
+    cost_warning_threshold_90: float | None = None
+
     # Thresholds (auto-calculated from monthly_token_limit if not provided)
     warning_threshold_80: int | None = None
     warning_threshold_90: int | None = None
@@ -1448,6 +1453,10 @@ class QuotaPolicy:
             self.warning_threshold_80 = int(self.monthly_token_limit * 0.8)
         if self.warning_threshold_90 is None:
             self.warning_threshold_90 = int(self.monthly_token_limit * 0.9)
+        if self.cost_warning_threshold_80 is None:
+            self.cost_warning_threshold_80 = round(self.monthly_cost_limit * 0.8, 2) if self.monthly_cost_limit else 0.0
+        if self.cost_warning_threshold_90 is None:
+            self.cost_warning_threshold_90 = round(self.monthly_cost_limit * 0.9, 2) if self.monthly_cost_limit else 0.0
 
     def to_dynamodb_item(self) -> dict[str, Any]:
         """Convert policy to DynamoDB item format."""
@@ -1473,6 +1482,10 @@ class QuotaPolicy:
             item["monthly_cost_limit"] = Decimal(str(self.monthly_cost_limit))
         if self.daily_cost_limit:
             item["daily_cost_limit"] = Decimal(str(self.daily_cost_limit))
+        if self.cost_warning_threshold_80:
+            item["cost_warning_threshold_80"] = Decimal(str(self.cost_warning_threshold_80))
+        if self.cost_warning_threshold_90:
+            item["cost_warning_threshold_90"] = Decimal(str(self.cost_warning_threshold_90))
 
         if self.created_at:
             item["created_at"] = self.created_at.isoformat()
@@ -1495,6 +1508,8 @@ class QuotaPolicy:
             daily_token_limit=int(item["daily_token_limit"]) if item.get("daily_token_limit") else None,
             monthly_cost_limit=float(item.get("monthly_cost_limit", 0) or 0),
             daily_cost_limit=float(item.get("daily_cost_limit", 0) or 0),
+            cost_warning_threshold_80=float(item.get("cost_warning_threshold_80", 0) or 0),
+            cost_warning_threshold_90=float(item.get("cost_warning_threshold_90", 0) or 0),
             warning_threshold_80=int(item.get("warning_threshold_80", 0)),
             warning_threshold_90=int(item.get("warning_threshold_90", 0)),
             enforcement_mode=EnforcementMode(item.get("enforcement_mode", "alert")),

@@ -459,3 +459,75 @@ class TestQuotaPolicyDataclassCostFields:
         loaded = QuotaPolicy.from_dynamodb_item(item)
         assert loaded.monthly_cost_limit == 0.0
         assert loaded.daily_cost_limit == 0.0
+
+
+class TestCostWarningThresholds:
+    """Cost warning thresholds are policy-configurable (dollar values), with
+    the same 80%/90%-of-budget auto-calc convention as the token thresholds."""
+
+    def test_auto_calculated_from_budget(self):
+        from claude_code_with_bedrock.models import PolicyType, QuotaPolicy
+
+        policy = QuotaPolicy(
+            policy_type=PolicyType.DEFAULT,
+            identifier="default",
+            monthly_token_limit=0,
+            monthly_cost_limit=50.0,
+        )
+        assert policy.cost_warning_threshold_80 == 40.0
+        assert policy.cost_warning_threshold_90 == 45.0
+
+    def test_explicit_thresholds_round_trip(self):
+        from claude_code_with_bedrock.models import PolicyType, QuotaPolicy
+
+        policy = QuotaPolicy(
+            policy_type=PolicyType.DEFAULT,
+            identifier="default",
+            monthly_token_limit=0,
+            monthly_cost_limit=50.0,
+            cost_warning_threshold_80=20.0,
+            cost_warning_threshold_90=35.0,
+        )
+        loaded = QuotaPolicy.from_dynamodb_item(policy.to_dynamodb_item())
+        assert loaded.cost_warning_threshold_80 == 20.0
+        assert loaded.cost_warning_threshold_90 == 35.0
+
+    def test_monitor_honors_configured_thresholds(self):
+        """A $20 warning threshold on a $100 budget must alert at $25 spend
+        (the hardcoded 80% multiplier would have stayed silent)."""
+        mod = _load_lambda("quota_monitor", {"MONTHLY_TOKEN_LIMIT": "0", "MONTHLY_COST_LIMIT_USD": "100"})
+        policy = {
+            "policy_type": "user",
+            "identifier": "u@example.gov",
+            "monthly_token_limit": 0,
+            "daily_token_limit": None,
+            "monthly_cost_limit": 100.0,
+            "daily_cost_limit": 0,
+            "cost_warning_threshold_80": 20.0,
+            "cost_warning_threshold_90": 90.0,
+            "warning_threshold_80": 0,
+            "warning_threshold_90": 0,
+            "enforcement_mode": "block",
+            "enabled": True,
+        }
+        alerts = mod.check_limits_and_generate_alerts(
+            email="u@example.gov", total_tokens=0, daily_tokens=0, policy=policy,
+            month_name="July 2026", current_date="2026-07-14", days_remaining=17,
+            days_in_month=31, sent_alerts=set(), monthly_cost=25.0, daily_cost=0,
+        )
+        cost_alerts = [a for a in alerts if a["alert_type"] == "monthly_cost"]
+        assert len(cost_alerts) == 1
+        assert cost_alerts[0]["alert_level"] == "warning"
+
+    def test_monitor_falls_back_to_multipliers_for_old_policies(self):
+        """Policies written before the thresholds existed keep 80%/90% behavior."""
+        mod = _load_lambda("quota_monitor", {"MONTHLY_TOKEN_LIMIT": "0", "MONTHLY_COST_LIMIT_USD": "100"})
+        policy = mod.resolve_user_quota("u@example.gov", [], {})  # env default: no threshold keys
+        alerts = mod.check_limits_and_generate_alerts(
+            email="u@example.gov", total_tokens=0, daily_tokens=0, policy=policy,
+            month_name="July 2026", current_date="2026-07-14", days_remaining=17,
+            days_in_month=31, sent_alerts=set(), monthly_cost=85.0, daily_cost=0,
+        )
+        cost_alerts = [a for a in alerts if a["alert_type"] == "monthly_cost"]
+        assert len(cost_alerts) == 1
+        assert cost_alerts[0]["alert_level"] == "warning"  # 85 > 80% of 100

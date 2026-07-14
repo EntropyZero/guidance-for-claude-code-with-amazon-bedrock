@@ -225,6 +225,18 @@ class QuotaSetCommand(Command):
         option("daily-cost-limit", None, description="Daily cost limit in USD (e.g., 10)", flag=False),
         option("budget", "b", description="Monthly budget in USD (e.g., 50)", flag=False),
         option("daily-budget", None, description="Daily budget in USD (e.g., 10)", flag=False),
+        option(
+            "cost-warning-80",
+            None,
+            description="Warning alert threshold in USD (default: 80% of the monthly budget)",
+            flag=False,
+        ),
+        option(
+            "cost-warning-90",
+            None,
+            description="Critical alert threshold in USD (default: 90% of the monthly budget)",
+            flag=False,
+        ),
         option("enforcement", "e", description="Enforcement mode: 'alert' (default) or 'block'", flag=False),
         option("daily-enforcement", None, description="Daily enforcement mode: 'alert' or 'block'", flag=False),
         option("disabled", None, description="Create policy in disabled state", flag=True),
@@ -250,6 +262,8 @@ class QuotaSetCommand(Command):
             "daily-cost-limit",
             "budget",
             "daily-budget",
+            "cost-warning-80",
+            "cost-warning-90",
             "enforcement",
             "daily-enforcement",
         ):
@@ -298,6 +312,18 @@ class QuotaSetUserCommand(Command):
         option("daily-cost-limit", None, description="Daily cost limit in USD (e.g., 10)", flag=False),
         option("budget", "b", description="Monthly budget in USD (e.g., 50)", flag=False),
         option("daily-budget", None, description="Daily budget in USD (e.g., 10)", flag=False),
+        option(
+            "cost-warning-80",
+            None,
+            description="Warning alert threshold in USD (default: 80% of the monthly budget)",
+            flag=False,
+        ),
+        option(
+            "cost-warning-90",
+            None,
+            description="Critical alert threshold in USD (default: 90% of the monthly budget)",
+            flag=False,
+        ),
         option("enforcement", "e", description="Monthly enforcement mode: 'alert' (default) or 'block'", flag=False),
         option("daily-enforcement", description="Daily enforcement mode: 'alert' (default) or 'block'", flag=False),
         option("disabled", description="Create policy in disabled state", flag=True),
@@ -397,6 +423,17 @@ class QuotaSetUserCommand(Command):
         if not ok:
             return 1
 
+        cost_warning_80 = None
+        if self.option("cost-warning-80"):
+            cost_warning_80 = _parse_cost_limit(self.option("cost-warning-80"), "cost-warning-80", console)
+            if cost_warning_80 is None:
+                return 1
+        cost_warning_90 = None
+        if self.option("cost-warning-90"):
+            cost_warning_90 = _parse_cost_limit(self.option("cost-warning-90"), "cost-warning-90", console)
+            if cost_warning_90 is None:
+                return 1
+
         try:
             manager = _get_quota_manager(profile)
             policy = manager.create_policy(
@@ -406,6 +443,8 @@ class QuotaSetUserCommand(Command):
                 daily_token_limit=daily_limit,
                 monthly_cost_limit=monthly_cost_limit or 0.0,
                 daily_cost_limit=daily_cost_limit or 0.0,
+                cost_warning_threshold_80=cost_warning_80,
+                cost_warning_threshold_90=cost_warning_90,
                 enforcement_mode=enforcement_mode,
                 daily_enforcement_mode=daily_enforcement_mode,
                 enabled=enabled,
@@ -438,6 +477,8 @@ class QuotaSetUserCommand(Command):
                     daily_token_limit=daily_limit,
                     monthly_cost_limit=monthly_cost_limit,
                     daily_cost_limit=daily_cost_limit,
+                    cost_warning_threshold_80=cost_warning_80,
+                    cost_warning_threshold_90=cost_warning_90,
                     enforcement_mode=enforcement_mode,
                     daily_enforcement_mode=daily_enforcement_mode,
                     enabled=enabled,
@@ -481,6 +522,18 @@ class QuotaSetGroupCommand(Command):
         option("daily-cost-limit", None, description="Daily cost limit in USD (e.g., 10)", flag=False),
         option("budget", "b", description="Monthly budget in USD (e.g., 50)", flag=False),
         option("daily-budget", None, description="Daily budget in USD (e.g., 10)", flag=False),
+        option(
+            "cost-warning-80",
+            None,
+            description="Warning alert threshold in USD (default: 80% of the monthly budget)",
+            flag=False,
+        ),
+        option(
+            "cost-warning-90",
+            None,
+            description="Critical alert threshold in USD (default: 90% of the monthly budget)",
+            flag=False,
+        ),
         option("enforcement", "e", description="Monthly enforcement mode: 'alert' (default) or 'block'", flag=False),
         option("daily-enforcement", description="Daily enforcement mode: 'alert' (default) or 'block'", flag=False),
         option("disabled", description="Create policy in disabled state", flag=True),
@@ -557,6 +610,17 @@ class QuotaSetGroupCommand(Command):
         if not ok:
             return 1
 
+        cost_warning_80 = None
+        if self.option("cost-warning-80"):
+            cost_warning_80 = _parse_cost_limit(self.option("cost-warning-80"), "cost-warning-80", console)
+            if cost_warning_80 is None:
+                return 1
+        cost_warning_90 = None
+        if self.option("cost-warning-90"):
+            cost_warning_90 = _parse_cost_limit(self.option("cost-warning-90"), "cost-warning-90", console)
+            if cost_warning_90 is None:
+                return 1
+
         try:
             manager = _get_quota_manager(profile)
             policy = manager.create_policy(
@@ -566,6 +630,8 @@ class QuotaSetGroupCommand(Command):
                 daily_token_limit=daily_limit,
                 monthly_cost_limit=monthly_cost_limit or 0.0,
                 daily_cost_limit=daily_cost_limit or 0.0,
+                cost_warning_threshold_80=cost_warning_80,
+                cost_warning_threshold_90=cost_warning_90,
                 enforcement_mode=enforcement_mode,
                 daily_enforcement_mode=daily_enforcement_mode,
                 enabled=enabled,
@@ -593,6 +659,8 @@ class QuotaSetGroupCommand(Command):
                     daily_token_limit=daily_limit,
                     monthly_cost_limit=monthly_cost_limit,
                     daily_cost_limit=daily_cost_limit,
+                    cost_warning_threshold_80=cost_warning_80,
+                    cost_warning_threshold_90=cost_warning_90,
                     enforcement_mode=enforcement_mode,
                     daily_enforcement_mode=daily_enforcement_mode,
                     enabled=enabled,
@@ -632,6 +700,18 @@ class QuotaSetDefaultCommand(Command):
         option("daily-cost-limit", None, description="Daily cost limit in USD (e.g., 10)", flag=False),
         option("budget", "b", description="Monthly budget in USD (e.g., 50)", flag=False),
         option("daily-budget", None, description="Daily budget in USD (e.g., 10)", flag=False),
+        option(
+            "cost-warning-80",
+            None,
+            description="Warning alert threshold in USD (default: 80% of the monthly budget)",
+            flag=False,
+        ),
+        option(
+            "cost-warning-90",
+            None,
+            description="Critical alert threshold in USD (default: 90% of the monthly budget)",
+            flag=False,
+        ),
         option("enforcement", "e", description="Monthly enforcement mode: 'alert' (default) or 'block'", flag=False),
         option("daily-enforcement", description="Daily enforcement mode: 'alert' (default) or 'block'", flag=False),
         option("disabled", description="Create policy in disabled state", flag=True),
@@ -707,6 +787,17 @@ class QuotaSetDefaultCommand(Command):
         if not ok:
             return 1
 
+        cost_warning_80 = None
+        if self.option("cost-warning-80"):
+            cost_warning_80 = _parse_cost_limit(self.option("cost-warning-80"), "cost-warning-80", console)
+            if cost_warning_80 is None:
+                return 1
+        cost_warning_90 = None
+        if self.option("cost-warning-90"):
+            cost_warning_90 = _parse_cost_limit(self.option("cost-warning-90"), "cost-warning-90", console)
+            if cost_warning_90 is None:
+                return 1
+
         try:
             manager = _get_quota_manager(profile)
             policy = manager.create_policy(
@@ -716,6 +807,8 @@ class QuotaSetDefaultCommand(Command):
                 daily_token_limit=daily_limit,
                 monthly_cost_limit=monthly_cost_limit or 0.0,
                 daily_cost_limit=daily_cost_limit or 0.0,
+                cost_warning_threshold_80=cost_warning_80,
+                cost_warning_threshold_90=cost_warning_90,
                 enforcement_mode=enforcement_mode,
                 daily_enforcement_mode=daily_enforcement_mode,
                 enabled=enabled,
@@ -743,6 +836,8 @@ class QuotaSetDefaultCommand(Command):
                     daily_token_limit=daily_limit,
                     monthly_cost_limit=monthly_cost_limit,
                     daily_cost_limit=daily_cost_limit,
+                    cost_warning_threshold_80=cost_warning_80,
+                    cost_warning_threshold_90=cost_warning_90,
                     enforcement_mode=enforcement_mode,
                     daily_enforcement_mode=daily_enforcement_mode,
                     enabled=enabled,

@@ -536,6 +536,8 @@ def _parse_policy_item(item):
         "daily_token_limit": int(item.get("daily_token_limit", 0)) if item.get("daily_token_limit") else None,
         "monthly_cost_limit": float(item.get("monthly_cost_limit", 0) or 0),
         "daily_cost_limit": float(item.get("daily_cost_limit", 0) or 0),
+        "cost_warning_threshold_80": float(item.get("cost_warning_threshold_80", 0) or 0),
+        "cost_warning_threshold_90": float(item.get("cost_warning_threshold_90", 0) or 0),
         "warning_threshold_80": int(item.get("warning_threshold_80", 0)),
         "warning_threshold_90": int(item.get("warning_threshold_90", 0)),
         "enforcement_mode": item.get("enforcement_mode", "alert"),
@@ -699,13 +701,17 @@ def check_limits_and_generate_alerts(email, total_tokens, daily_tokens, policy,
     # quota_check does the blocking, these alerts are the early warning.
     monthly_cost_limit = float(policy.get("monthly_cost_limit", 0) or 0)
     if monthly_cost_limit > 0:
+        # Policy-configurable warning ladder ($); falls back to 80%/90% of the
+        # budget for policies written before the thresholds existed.
+        cost_warn_80 = float(policy.get("cost_warning_threshold_80", 0) or 0) or monthly_cost_limit * 0.8
+        cost_warn_90 = float(policy.get("cost_warning_threshold_90", 0) or 0) or monthly_cost_limit * 0.9
         cost_pct = (monthly_cost / monthly_cost_limit) * 100
         clevel = None
         if monthly_cost > monthly_cost_limit:
             clevel = "exceeded"
-        elif monthly_cost > monthly_cost_limit * 0.9:
+        elif monthly_cost > cost_warn_90:
             clevel = "critical"
-        elif monthly_cost > monthly_cost_limit * 0.8:
+        elif monthly_cost > cost_warn_80:
             clevel = "warning"
         if clevel and f"{email}#monthly_cost#{clevel}" not in sent_alerts:
             alerts.append({
