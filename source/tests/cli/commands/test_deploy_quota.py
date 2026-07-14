@@ -122,31 +122,57 @@ class TestResolveOidcConfig:
         assert issuer == ""
         assert client_id == ""
 
-    def test_sso_enabled_okta_returns_valid_issuer(self, command):
-        """Okta returns the default authz server issuer (https://<domain>/oauth2/default).
+    def test_sso_enabled_okta_org_as_returns_bare_domain_issuer(self, command):
+        """Okta with no okta_auth_server uses the Org Authorization Server issuer.
 
-        Okta tokens are minted by the default custom authorization server, so the
-        quota JWT authorizer issuer must include the /oauth2/default suffix to match
-        the token's iss claim.
+        The credential helpers (Go provider.ConfigFor and the Python
+        PROVIDER_CONFIGS fallback) default to the Org Authorization Server,
+        whose tokens carry iss=https://<domain> with NO /oauth2/... suffix.
+        The quota JWT authorizer must match that exact issuer or API Gateway
+        401s every /check request before the Lambda is ever invoked.
         """
         profile = Mock()
         profile.sso_enabled = True
         profile.provider_type = "okta"
         profile.provider_domain = "company.okta.com"
+        profile.okta_auth_server = ""
         profile.client_id = "abc123"
         issuer, client_id = command._resolve_oidc_config(profile)
-        assert issuer == "https://company.okta.com/oauth2/default"
+        assert issuer == "https://company.okta.com"
         assert client_id == "abc123"
 
-    def test_sso_enabled_okta_does_not_double_append_oauth2_default(self, command):
-        """If provider_domain already includes /oauth2/default, it isn't appended twice."""
+    def test_sso_enabled_okta_custom_as_appends_auth_server_id(self, command):
+        """Okta with okta_auth_server set uses that Custom Authorization Server issuer."""
+        profile = Mock()
+        profile.sso_enabled = True
+        profile.provider_type = "okta"
+        profile.provider_domain = "company.okta.com"
+        profile.okta_auth_server = "default"
+        profile.client_id = "abc123"
+        issuer, _ = command._resolve_oidc_config(profile)
+        assert issuer == "https://company.okta.com/oauth2/default"
+
+    def test_sso_enabled_okta_does_not_double_append_auth_server(self, command):
+        """If provider_domain already includes the CAS path, it isn't appended twice."""
         profile = Mock()
         profile.sso_enabled = True
         profile.provider_type = "okta"
         profile.provider_domain = "https://company.okta.com/oauth2/default"
+        profile.okta_auth_server = "default"
         profile.client_id = "abc123"
         issuer, _ = command._resolve_oidc_config(profile)
         assert issuer == "https://company.okta.com/oauth2/default"
+
+    def test_sso_enabled_okta_mock_auth_server_treated_as_org_as(self, command):
+        """A non-string okta_auth_server (legacy profile, Mock) resolves as Org AS."""
+        profile = Mock()
+        profile.sso_enabled = True
+        profile.provider_type = "okta"
+        profile.provider_domain = "company.okta.com"
+        # Mock auto-attribute: not a str — must not leak into the issuer URL
+        profile.client_id = "abc123"
+        issuer, _ = command._resolve_oidc_config(profile)
+        assert issuer == "https://company.okta.com"
 
     def test_sso_enabled_cognito_returns_pool_url(self, command):
         """Cognito provider returns cognito-idp issuer URL."""

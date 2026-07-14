@@ -2786,6 +2786,15 @@ RUN pyinstaller \
         if profile.provider_type == "cognito" and profile.cognito_user_pool_id:
             config[profile_name]["cognito_user_pool_id"] = profile.cognito_user_pool_id
 
+        # Okta Custom Authorization Server selection. Without this the helpers
+        # always fall back to the Org Authorization Server, while the quota JWT
+        # authorizer (deploy.py _resolve_oidc_config) follows the profile — the
+        # issuer mismatch 401s every quota check. Written under both keys: the
+        # Go binary reads okta_auth_server_id, the Python provider okta_auth_server.
+        if config[profile_name]["provider_type"] == "okta" and getattr(profile, "okta_auth_server", ""):
+            config[profile_name]["okta_auth_server_id"] = profile.okta_auth_server
+            config[profile_name]["okta_auth_server"] = profile.okta_auth_server
+
         # Add selected_model if available
         if hasattr(profile, "selected_model") and profile.selected_model:
             config[profile_name]["selected_model"] = profile.selected_model
