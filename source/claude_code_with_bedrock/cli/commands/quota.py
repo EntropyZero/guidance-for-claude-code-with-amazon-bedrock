@@ -378,18 +378,36 @@ class QuotaSetUserCommand(Command):
                 monthly_cost_limit = float(budget_str)
                 daily_budget_str = questionary.text("Daily budget per user (USD, blank to skip):", default="").ask()
                 daily_cost_limit = float(daily_budget_str) if daily_budget_str else None
-                # Use a minimal token limit as placeholder since it's required
-                monthly_limit_str = "1B"
+                # Cost-only policy: token limits disabled (0) — the budget is
+                # the sole control. (Previously a 1B-token placeholder, which
+                # produced bogus 800M/900M warning thresholds and made the
+                # policy compare on tokens in group restrictiveness selection.)
+                monthly_limit_str = "0"
             else:
                 console.print("[red]--monthly-limit or --budget is required[/red]")
                 return 1
         else:
-            monthly_cost_limit = None
-            daily_cost_limit = None
+            # Parse cost limits from flags (resolve --budget alias) BEFORE the
+            # token-limit gate so a cost-only invocation (--budget with no
+            # --monthly-limit) works — it previously hard-failed with
+            # "--monthly-limit is required", making cost-only policies
+            # impossible to create non-interactively.
+            budget_val = self.option("budget") or self.option("monthly-cost-limit")
+            monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
+            if monthly_cost_limit is None and budget_val:
+                return 1
+            daily_budget_val = self.option("daily-budget") or self.option("daily-cost-limit")
+            daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
+            if daily_cost_limit is None and daily_budget_val:
+                return 1
 
         if not monthly_limit_str:
-            console.print("[red]--monthly-limit is required[/red]")
-            return 1
+            if monthly_cost_limit or daily_cost_limit:
+                # Cost-only policy: token limits disabled (0), budget governs.
+                monthly_limit_str = "0"
+            else:
+                console.print("[red]--monthly-limit or --budget is required[/red]")
+                return 1
 
         try:
             monthly_limit = _parse_tokens(monthly_limit_str)
@@ -422,18 +440,6 @@ class QuotaSetUserCommand(Command):
         daily_enforcement_mode, ok = _parse_enforcement(self.option("daily-enforcement"), console)
         if not ok:
             return 1
-
-        # Parse cost limits (resolve --budget alias)
-        if monthly_cost_limit is None:
-            budget_val = self.option("budget") or self.option("monthly-cost-limit")
-            monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
-            if monthly_cost_limit is None and budget_val:
-                return 1
-        if daily_cost_limit is None:
-            daily_budget_val = self.option("daily-budget") or self.option("daily-cost-limit")
-            daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
-            if daily_cost_limit is None and daily_budget_val:
-                return 1
 
         try:
             manager = _get_quota_manager(profile)
@@ -539,9 +545,26 @@ class QuotaSetGroupCommand(Command):
         group = self.argument("group")
         monthly_limit_str = self.option("monthly-limit")
 
-        if not monthly_limit_str:
-            console.print("[red]--monthly-limit is required[/red]")
+        # Parse cost limits (resolve --budget alias) BEFORE the token-limit
+        # gate so a cost-only invocation (--budget with no --monthly-limit)
+        # works — it previously hard-failed with "--monthly-limit is
+        # required", making cost-only policies impossible to create.
+        budget_val = self.option("budget") or self.option("monthly-cost-limit")
+        monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
+        if monthly_cost_limit is None and budget_val:
             return 1
+        daily_budget_val = self.option("daily-budget") or self.option("daily-cost-limit")
+        daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
+        if daily_cost_limit is None and daily_budget_val:
+            return 1
+
+        if not monthly_limit_str:
+            if monthly_cost_limit or daily_cost_limit:
+                # Cost-only policy: token limits disabled (0), budget governs.
+                monthly_limit_str = "0"
+            else:
+                console.print("[red]--monthly-limit or --budget is required[/red]")
+                return 1
 
         try:
             monthly_limit = _parse_tokens(monthly_limit_str)
@@ -573,16 +596,6 @@ class QuotaSetGroupCommand(Command):
 
         daily_enforcement_mode, ok = _parse_enforcement(self.option("daily-enforcement"), console)
         if not ok:
-            return 1
-
-        # Parse cost limits (resolve --budget alias)
-        budget_val = self.option("budget") or self.option("monthly-cost-limit")
-        monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
-        if monthly_cost_limit is None and budget_val:
-            return 1
-        daily_budget_val = self.option("daily-budget") or self.option("daily-cost-limit")
-        daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
-        if daily_cost_limit is None and daily_budget_val:
             return 1
 
         try:
@@ -678,9 +691,26 @@ class QuotaSetDefaultCommand(Command):
 
         monthly_limit_str = self.option("monthly-limit")
 
-        if not monthly_limit_str:
-            console.print("[red]--monthly-limit is required[/red]")
+        # Parse cost limits (resolve --budget alias) BEFORE the token-limit
+        # gate so a cost-only invocation (--budget with no --monthly-limit)
+        # works — it previously hard-failed with "--monthly-limit is
+        # required", making cost-only policies impossible to create.
+        budget_val = self.option("budget") or self.option("monthly-cost-limit")
+        monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
+        if monthly_cost_limit is None and budget_val:
             return 1
+        daily_budget_val = self.option("daily-budget") or self.option("daily-cost-limit")
+        daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
+        if daily_cost_limit is None and daily_budget_val:
+            return 1
+
+        if not monthly_limit_str:
+            if monthly_cost_limit or daily_cost_limit:
+                # Cost-only policy: token limits disabled (0), budget governs.
+                monthly_limit_str = "0"
+            else:
+                console.print("[red]--monthly-limit or --budget is required[/red]")
+                return 1
 
         try:
             monthly_limit = _parse_tokens(monthly_limit_str)
@@ -712,16 +742,6 @@ class QuotaSetDefaultCommand(Command):
 
         daily_enforcement_mode, ok = _parse_enforcement(self.option("daily-enforcement"), console)
         if not ok:
-            return 1
-
-        # Parse cost limits (resolve --budget alias)
-        budget_val = self.option("budget") or self.option("monthly-cost-limit")
-        monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
-        if monthly_cost_limit is None and budget_val:
-            return 1
-        daily_budget_val = self.option("daily-budget") or self.option("daily-cost-limit")
-        daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
-        if daily_cost_limit is None and daily_budget_val:
             return 1
 
         try:

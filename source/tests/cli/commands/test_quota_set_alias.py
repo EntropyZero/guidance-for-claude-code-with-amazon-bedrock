@@ -146,3 +146,90 @@ class TestQuotaSetRouting:
         assert "--group" in output
         assert "--default" in output
         assert "--budget" in output
+
+
+class TestCostOnlyPolicies:
+    """Budget-only invocations must work without a token limit.
+
+    Regression: set-user/set-group/set-default hard-failed with
+    "--monthly-limit is required" when only --budget was given, making
+    cost-only policies impossible to create from the CLI — the QuotaPolicies
+    items never got their cost attributes. A cost-only policy now stores
+    monthly_token_limit=0 (token limits disabled; the budget governs).
+    """
+
+    def _mock_manager(self, mock_config_cls, mock_get_manager):
+        mock_config = MagicMock()
+        mock_profile = MagicMock()
+        mock_profile.aws_region = "us-gov-west-1"
+        mock_config.active_profile = "default"
+        mock_config.get_profile.return_value = mock_profile
+        mock_config_cls.load.return_value = mock_config
+
+        mock_manager = MagicMock()
+        mock_policy = MagicMock()
+        mock_policy.monthly_token_limit = 0
+        mock_policy.daily_token_limit = None
+        mock_policy.enforcement_mode = MagicMock(value="block")
+        mock_policy.daily_enforcement_mode = MagicMock(value="alert")
+        mock_manager.create_policy.return_value = mock_policy
+        mock_get_manager.return_value = mock_manager
+        return mock_manager
+
+    @patch("claude_code_with_bedrock.cli.commands.quota._get_quota_manager")
+    @patch("claude_code_with_bedrock.cli.commands.quota.Config")
+    def test_set_user_budget_only(self, mock_config_cls, mock_get_manager):
+        mock_manager = self._mock_manager(mock_config_cls, mock_get_manager)
+
+        app = create_application()
+        tester = ApplicationTester(app)
+        tester.execute("quota set-user alice@company.com --budget 50")
+
+        assert tester.status_code == 0
+        kwargs = mock_manager.create_policy.call_args.kwargs
+        assert kwargs["monthly_token_limit"] == 0
+        # Cost limits must be written to the policy item
+        assert mock_manager.table.update_item.called
+
+    @patch("claude_code_with_bedrock.cli.commands.quota._get_quota_manager")
+    @patch("claude_code_with_bedrock.cli.commands.quota.Config")
+    def test_set_group_budget_only(self, mock_config_cls, mock_get_manager):
+        mock_manager = self._mock_manager(mock_config_cls, mock_get_manager)
+
+        app = create_application()
+        tester = ApplicationTester(app)
+        tester.execute("quota set-group engineering --budget 200 --daily-budget 20")
+
+        assert tester.status_code == 0
+        kwargs = mock_manager.create_policy.call_args.kwargs
+        assert kwargs["monthly_token_limit"] == 0
+        assert mock_manager.table.update_item.called
+
+    @patch("claude_code_with_bedrock.cli.commands.quota._get_quota_manager")
+    @patch("claude_code_with_bedrock.cli.commands.quota.Config")
+    def test_set_default_budget_only(self, mock_config_cls, mock_get_manager):
+        mock_manager = self._mock_manager(mock_config_cls, mock_get_manager)
+
+        app = create_application()
+        tester = ApplicationTester(app)
+        tester.execute("quota set-default --budget 30")
+
+        assert tester.status_code == 0
+        kwargs = mock_manager.create_policy.call_args.kwargs
+        assert kwargs["monthly_token_limit"] == 0
+        assert mock_manager.table.update_item.called
+
+    @patch("claude_code_with_bedrock.cli.commands.quota._get_quota_manager")
+    @patch("claude_code_with_bedrock.cli.commands.quota.Config")
+    def test_no_limits_at_all_still_errors(self, mock_config_cls, mock_get_manager, capsys):
+        """set-default with neither token nor cost limit keeps the clear error."""
+        mock_manager = self._mock_manager(mock_config_cls, mock_get_manager)
+
+        app = create_application()
+        tester = ApplicationTester(app)
+        tester.execute("quota set-default")
+
+        assert tester.status_code == 1
+        # Error prints via rich Console (real stdout), not cleo's captured io
+        assert "--monthly-limit or --budget is required" in capsys.readouterr().out
+        mock_manager.create_policy.assert_not_called()
