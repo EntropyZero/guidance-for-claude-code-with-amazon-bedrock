@@ -381,10 +381,17 @@ def lambda_handler(event, context):
             print("No usage data in DynamoDB")
             return {"statusCode": 200, "body": "No usage data"}
 
-        # Step 3: Load policies
+        # Step 3: Load policies and recorded group memberships
         policies_cache = {}
+        groups_by_email = {}
         if ENABLE_FINEGRAINED_QUOTAS and policies_table:
             policies_cache = load_all_policies()
+            # Group memberships come from the GROUPS#CURRENT records that
+            # quota_check persists from JWT claims — the metrics this Lambda
+            # aggregates carry only the user email, so without this join group
+            # policies would never be monitored or alerted (groups was
+            # previously hard-coded to []).
+            groups_by_email = load_user_groups()
 
         # Step 3: Check sent alerts
         sent_alerts = get_sent_alerts(month_name)
@@ -395,7 +402,7 @@ def lambda_handler(event, context):
 
         for email, usage in usage_data.items():
             stats["total_users"] += 1
-            policy = resolve_user_quota(email, [], policies_cache)
+            policy = resolve_user_quota(email, groups_by_email.get(email, []), policies_cache)
             if policy is None:
                 continue
 
@@ -483,6 +490,37 @@ def load_all_policies():
     except Exception as e:
         print(f"Error loading policies: {e}")
     return policies
+
+
+def load_user_groups():
+    """Load per-user group memberships recorded by quota_check.
+
+    quota_check writes pk=USER#<email>, sk=GROUPS#CURRENT items from JWT
+    claims on every check. Returns {email: [group, ...]}. Users who never
+    hit the quota API (or authenticate without a JWT) simply have no record
+    and resolve with no groups — same as the prior behavior.
+    """
+    groups = {}
+    try:
+        response = quota_table.scan(
+            FilterExpression=Attr("sk").eq("GROUPS#CURRENT"),
+            ProjectionExpression="email, groups_list",
+        )
+        while True:
+            for item in response.get("Items", []):
+                email = item.get("email")
+                if email:
+                    groups[email] = [str(g) for g in item.get("groups_list", [])]
+            if "LastEvaluatedKey" not in response:
+                break
+            response = quota_table.scan(
+                FilterExpression=Attr("sk").eq("GROUPS#CURRENT"),
+                ProjectionExpression="email, groups_list",
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+            )
+    except Exception as e:
+        print(f"Error loading user groups (group policies skipped this run): {e}")
+    return groups
 
 
 def _policy_restrictiveness_key(policy):

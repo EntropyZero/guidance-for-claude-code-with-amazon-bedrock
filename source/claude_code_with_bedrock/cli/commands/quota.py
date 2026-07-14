@@ -170,54 +170,6 @@ def _parse_cost_limit(value: str | None, name: str, console) -> float | None:
         return None
 
 
-def _write_cost_limits(
-    manager: QuotaPolicyManager,
-    policy_type: PolicyType,
-    identifier: str,
-    monthly_cost_limit: float | None,
-    daily_cost_limit: float | None,
-) -> None:
-    """Write cost limit fields directly to the policy DynamoDB item.
-
-    Cost limits are stored alongside token limits in the QuotaPolicies table
-    but are not part of the QuotaPolicy dataclass (they're read directly by
-    the quota_check Lambda).
-
-    Args:
-        manager: QuotaPolicyManager instance.
-        policy_type: Policy type.
-        identifier: Policy identifier.
-        monthly_cost_limit: Monthly USD limit (0 = disabled).
-        daily_cost_limit: Daily USD limit (0 = disabled).
-    """
-    from decimal import Decimal
-
-    pk = manager._make_pk(policy_type, identifier)
-    update_parts = []
-    expression_values = {}
-
-    if monthly_cost_limit and monthly_cost_limit > 0:
-        update_parts.append("monthly_cost_limit = :mcl")
-        expression_values[":mcl"] = Decimal(str(monthly_cost_limit))
-    elif monthly_cost_limit == 0:
-        update_parts.append("monthly_cost_limit = :mcl")
-        expression_values[":mcl"] = Decimal("0")
-
-    if daily_cost_limit and daily_cost_limit > 0:
-        update_parts.append("daily_cost_limit = :dcl")
-        expression_values[":dcl"] = Decimal(str(daily_cost_limit))
-    elif daily_cost_limit == 0:
-        update_parts.append("daily_cost_limit = :dcl")
-        expression_values[":dcl"] = Decimal("0")
-
-    if update_parts and expression_values:
-        manager.table.update_item(
-            Key={"pk": pk, "sk": "CURRENT"},
-            UpdateExpression="SET " + ", ".join(update_parts),
-            ExpressionAttributeValues=expression_values,
-        )
-
-
 class QuotaCommand(Command):
     """Manage quota policies."""
 
@@ -393,13 +345,17 @@ class QuotaSetUserCommand(Command):
             # "--monthly-limit is required", making cost-only policies
             # impossible to create non-interactively.
             budget_val = self.option("budget") or self.option("monthly-cost-limit")
-            monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
-            if monthly_cost_limit is None and budget_val:
-                return 1
+            monthly_cost_limit = None
+            if budget_val:
+                monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
+                if monthly_cost_limit is None:
+                    return 1
             daily_budget_val = self.option("daily-budget") or self.option("daily-cost-limit")
-            daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
-            if daily_cost_limit is None and daily_budget_val:
-                return 1
+            daily_cost_limit = None
+            if daily_budget_val:
+                daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
+                if daily_cost_limit is None:
+                    return 1
 
         if not monthly_limit_str:
             if monthly_cost_limit or daily_cost_limit:
@@ -448,13 +404,12 @@ class QuotaSetUserCommand(Command):
                 identifier=email,
                 monthly_token_limit=monthly_limit,
                 daily_token_limit=daily_limit,
+                monthly_cost_limit=monthly_cost_limit or 0.0,
+                daily_cost_limit=daily_cost_limit or 0.0,
                 enforcement_mode=enforcement_mode,
                 daily_enforcement_mode=daily_enforcement_mode,
                 enabled=enabled,
             )
-            # Write cost limits directly to DynamoDB if provided
-            if monthly_cost_limit or daily_cost_limit:
-                _write_cost_limits(manager, PolicyType.USER, email, monthly_cost_limit, daily_cost_limit)
             console.print(f"[green]Created user quota policy for {email}[/green]")
             console.print(f"  Monthly limit: {_format_tokens(policy.monthly_token_limit)}")
             if policy.daily_token_limit:
@@ -481,12 +436,12 @@ class QuotaSetUserCommand(Command):
                     identifier=email,
                     monthly_token_limit=monthly_limit,
                     daily_token_limit=daily_limit,
+                    monthly_cost_limit=monthly_cost_limit,
+                    daily_cost_limit=daily_cost_limit,
                     enforcement_mode=enforcement_mode,
                     daily_enforcement_mode=daily_enforcement_mode,
                     enabled=enabled,
                 )
-                if monthly_cost_limit or daily_cost_limit:
-                    _write_cost_limits(manager, PolicyType.USER, email, monthly_cost_limit, daily_cost_limit)
                 console.print(f"[yellow]Updated existing user quota policy for {email}[/yellow]")
                 console.print(f"  Monthly limit: {_format_tokens(policy.monthly_token_limit)}")
                 if policy.daily_token_limit:
@@ -550,13 +505,17 @@ class QuotaSetGroupCommand(Command):
         # works — it previously hard-failed with "--monthly-limit is
         # required", making cost-only policies impossible to create.
         budget_val = self.option("budget") or self.option("monthly-cost-limit")
-        monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
-        if monthly_cost_limit is None and budget_val:
-            return 1
+        monthly_cost_limit = None
+        if budget_val:
+            monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
+            if monthly_cost_limit is None:
+                return 1
         daily_budget_val = self.option("daily-budget") or self.option("daily-cost-limit")
-        daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
-        if daily_cost_limit is None and daily_budget_val:
-            return 1
+        daily_cost_limit = None
+        if daily_budget_val:
+            daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
+            if daily_cost_limit is None:
+                return 1
 
         if not monthly_limit_str:
             if monthly_cost_limit or daily_cost_limit:
@@ -605,12 +564,12 @@ class QuotaSetGroupCommand(Command):
                 identifier=group,
                 monthly_token_limit=monthly_limit,
                 daily_token_limit=daily_limit,
+                monthly_cost_limit=monthly_cost_limit or 0.0,
+                daily_cost_limit=daily_cost_limit or 0.0,
                 enforcement_mode=enforcement_mode,
                 daily_enforcement_mode=daily_enforcement_mode,
                 enabled=enabled,
             )
-            if monthly_cost_limit or daily_cost_limit:
-                _write_cost_limits(manager, PolicyType.GROUP, group, monthly_cost_limit, daily_cost_limit)
             console.print(f"[green]Created group quota policy for '{group}'[/green]")
             console.print(f"  Monthly limit: {_format_tokens(policy.monthly_token_limit)}")
             if policy.daily_token_limit:
@@ -632,12 +591,12 @@ class QuotaSetGroupCommand(Command):
                     identifier=group,
                     monthly_token_limit=monthly_limit,
                     daily_token_limit=daily_limit,
+                    monthly_cost_limit=monthly_cost_limit,
+                    daily_cost_limit=daily_cost_limit,
                     enforcement_mode=enforcement_mode,
                     daily_enforcement_mode=daily_enforcement_mode,
                     enabled=enabled,
                 )
-                if monthly_cost_limit or daily_cost_limit:
-                    _write_cost_limits(manager, PolicyType.GROUP, group, monthly_cost_limit, daily_cost_limit)
                 console.print(f"[yellow]Updated existing group quota policy for '{group}'[/yellow]")
                 console.print(f"  Monthly limit: {_format_tokens(policy.monthly_token_limit)}")
                 if policy.daily_token_limit:
@@ -696,13 +655,17 @@ class QuotaSetDefaultCommand(Command):
         # works — it previously hard-failed with "--monthly-limit is
         # required", making cost-only policies impossible to create.
         budget_val = self.option("budget") or self.option("monthly-cost-limit")
-        monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
-        if monthly_cost_limit is None and budget_val:
-            return 1
+        monthly_cost_limit = None
+        if budget_val:
+            monthly_cost_limit = _parse_cost_limit(budget_val, "budget/monthly-cost-limit", console)
+            if monthly_cost_limit is None:
+                return 1
         daily_budget_val = self.option("daily-budget") or self.option("daily-cost-limit")
-        daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
-        if daily_cost_limit is None and daily_budget_val:
-            return 1
+        daily_cost_limit = None
+        if daily_budget_val:
+            daily_cost_limit = _parse_cost_limit(daily_budget_val, "daily-budget/daily-cost-limit", console)
+            if daily_cost_limit is None:
+                return 1
 
         if not monthly_limit_str:
             if monthly_cost_limit or daily_cost_limit:
@@ -751,12 +714,12 @@ class QuotaSetDefaultCommand(Command):
                 identifier="default",
                 monthly_token_limit=monthly_limit,
                 daily_token_limit=daily_limit,
+                monthly_cost_limit=monthly_cost_limit or 0.0,
+                daily_cost_limit=daily_cost_limit or 0.0,
                 enforcement_mode=enforcement_mode,
                 daily_enforcement_mode=daily_enforcement_mode,
                 enabled=enabled,
             )
-            if monthly_cost_limit or daily_cost_limit:
-                _write_cost_limits(manager, PolicyType.DEFAULT, "default", monthly_cost_limit, daily_cost_limit)
             console.print("[green]Created default quota policy[/green]")
             console.print(f"  Monthly limit: {_format_tokens(policy.monthly_token_limit)}")
             if policy.daily_token_limit:
@@ -778,12 +741,12 @@ class QuotaSetDefaultCommand(Command):
                     identifier="default",
                     monthly_token_limit=monthly_limit,
                     daily_token_limit=daily_limit,
+                    monthly_cost_limit=monthly_cost_limit,
+                    daily_cost_limit=daily_cost_limit,
                     enforcement_mode=enforcement_mode,
                     daily_enforcement_mode=daily_enforcement_mode,
                     enabled=enabled,
                 )
-                if monthly_cost_limit or daily_cost_limit:
-                    _write_cost_limits(manager, PolicyType.DEFAULT, "default", monthly_cost_limit, daily_cost_limit)
                 console.print("[yellow]Updated existing default quota policy[/yellow]")
                 console.print(f"  Monthly limit: {_format_tokens(policy.monthly_token_limit)}")
                 if policy.daily_token_limit:

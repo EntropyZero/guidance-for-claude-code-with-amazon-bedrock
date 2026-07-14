@@ -395,3 +395,35 @@ class TestGroupPolicyRestrictiveness:
         policy = mod.resolve_user_quota("dev@x.com", ["engineering", "unlimited"], cache)
 
         assert policy["identifier"] == "engineering"
+
+
+class TestLoadUserGroups:
+    """quota_monitor must join the GROUPS#CURRENT records quota_check writes.
+
+    Regression: groups was hard-coded to [] in resolve_user_quota, so group
+    policies were never monitored or alerted.
+    """
+
+    def test_groups_loaded_across_pages(self, base_env):
+        mod = _load_quota_monitor({**base_env, "ENABLE_FINEGRAINED_QUOTAS": "true"})
+        table = MagicMock()
+        table.scan.side_effect = [
+            {
+                "Items": [{"email": "a@x.com", "groups_list": ["engineering"]}],
+                "LastEvaluatedKey": {"pk": "cursor"},
+            },
+            {"Items": [{"email": "b@x.com", "groups_list": ["interns", "ai-team"]}]},
+        ]
+        mod.quota_table = table
+
+        groups = mod.load_user_groups()
+
+        assert groups == {"a@x.com": ["engineering"], "b@x.com": ["interns", "ai-team"]}
+
+    def test_scan_failure_returns_empty_map(self, base_env):
+        mod = _load_quota_monitor({**base_env, "ENABLE_FINEGRAINED_QUOTAS": "true"})
+        table = MagicMock()
+        table.scan.side_effect = Exception("boom")
+        mod.quota_table = table
+
+        assert mod.load_user_groups() == {}

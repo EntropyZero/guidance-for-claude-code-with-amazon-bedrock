@@ -2004,8 +2004,18 @@ class DeployCommand(Command):
             monthly_limit = getattr(profile, "monthly_token_limit", 225000000)
             daily_limit = getattr(profile, "daily_token_limit", None)
             monthly_enforcement = getattr(profile, "monthly_enforcement_mode", "block")
+            daily_enforcement = getattr(profile, "daily_enforcement_mode", "alert")
+            # Cost mode: the wizard zeroes the token limits and the $ budgets
+            # govern. The seeded policy must carry them — previously only the
+            # token fields were written, so cost-mode deployments seeded a
+            # default policy with monthly_token_limit=0 and NO cost attributes,
+            # i.e. no limits at all (and create-only seeding meant redeploys
+            # never repaired it).
+            monthly_cost_limit = float(getattr(profile, "monthly_cost_limit_usd", 0) or 0)
+            daily_cost_limit = float(getattr(profile, "daily_cost_limit_usd", 0) or 0)
 
             enforcement_mode = EnforcementMode.BLOCK if monthly_enforcement == "block" else EnforcementMode.ALERT
+            daily_enforcement_mode = EnforcementMode.BLOCK if daily_enforcement == "block" else EnforcementMode.ALERT
 
             try:
                 manager.create_policy(
@@ -2013,14 +2023,28 @@ class DeployCommand(Command):
                     identifier="default",
                     monthly_token_limit=monthly_limit,
                     daily_token_limit=daily_limit,
+                    monthly_cost_limit=monthly_cost_limit,
+                    daily_cost_limit=daily_cost_limit,
                     enforcement_mode=enforcement_mode,
+                    daily_enforcement_mode=daily_enforcement_mode,
                 )
+                if monthly_cost_limit > 0:
+                    limit_desc = f"monthly budget: ${monthly_cost_limit:.2f}/user"
+                    if daily_cost_limit > 0:
+                        limit_desc += f", daily cap: ${daily_cost_limit:.2f}/user"
+                else:
+                    limit_desc = f"monthly: {monthly_limit:,} tokens"
                 console.print(
-                    f"[green]Created default quota policy "
-                    f"(monthly: {monthly_limit:,} tokens, enforcement: {monthly_enforcement})[/green]"
+                    f"[green]Created default quota policy ({limit_desc}, enforcement: {monthly_enforcement})[/green]"
                 )
             except PolicyAlreadyExistsError:
                 console.print("[dim]Default quota policy already exists (skipping)[/dim]")
+                if monthly_cost_limit > 0:
+                    console.print(
+                        "[dim]To apply the profile's cost budget to it: "
+                        f"ccwb quota set-default --budget {monthly_cost_limit:g} "
+                        f"--enforcement {monthly_enforcement}[/dim]"
+                    )
 
         except Exception as e:
             console.print(f"[yellow]Warning: Could not create default quota policy: {str(e)}[/yellow]")

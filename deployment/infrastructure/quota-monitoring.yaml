@@ -458,6 +458,15 @@ Resources:
                   - !GetAtt UserQuotaMetrics.Arn
                   - !GetAtt QuotaPolicies.Arn
                   - !Sub '${QuotaPolicies.Arn}/index/*'
+              # quota_check persists each caller's JWT group memberships
+              # (USER#<email> / GROUPS#CURRENT) so the scheduled quota_monitor
+              # can resolve group policies — the monitor's metrics source has
+              # no group information.
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !GetAtt UserQuotaMetrics.Arn
 
   # Lambda function for real-time quota checking
   QuotaCheckFunction:

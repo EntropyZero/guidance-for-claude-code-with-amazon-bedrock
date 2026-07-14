@@ -1420,6 +1420,12 @@ class QuotaPolicy:
     # Optional limits
     daily_token_limit: int | None = None
 
+    # Cost budgets ($ per user, 0 = disabled). In cost mode the token limits
+    # are 0 and these govern — the quota_check/quota_monitor Lambdas enforce
+    # them server-side from per-model Bedrock pricing.
+    monthly_cost_limit: float = 0.0
+    daily_cost_limit: float = 0.0
+
     # Thresholds (auto-calculated from monthly_token_limit if not provided)
     warning_threshold_80: int | None = None
     warning_threshold_90: int | None = None
@@ -1461,6 +1467,13 @@ class QuotaPolicy:
         if self.daily_token_limit is not None:
             item["daily_token_limit"] = self.daily_token_limit
 
+        # DynamoDB rejects Python floats — cost budgets are stored as Decimal.
+        # Only written when set, keeping token-only items in their historical shape.
+        if self.monthly_cost_limit:
+            item["monthly_cost_limit"] = Decimal(str(self.monthly_cost_limit))
+        if self.daily_cost_limit:
+            item["daily_cost_limit"] = Decimal(str(self.daily_cost_limit))
+
         if self.created_at:
             item["created_at"] = self.created_at.isoformat()
 
@@ -1480,6 +1493,8 @@ class QuotaPolicy:
             identifier=item["identifier"],
             monthly_token_limit=int(item["monthly_token_limit"]),
             daily_token_limit=int(item["daily_token_limit"]) if item.get("daily_token_limit") else None,
+            monthly_cost_limit=float(item.get("monthly_cost_limit", 0) or 0),
+            daily_cost_limit=float(item.get("daily_cost_limit", 0) or 0),
             warning_threshold_80=int(item.get("warning_threshold_80", 0)),
             warning_threshold_90=int(item.get("warning_threshold_90", 0)),
             enforcement_mode=EnforcementMode(item.get("enforcement_mode", "alert")),

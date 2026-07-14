@@ -48,6 +48,18 @@ def _load_lambda(name: str, env: dict):
         "QUOTA_TABLE": "TestQuotaTable",
         "POLICIES_TABLE": "TestPoliciesTable",
         "SNS_TOPIC_ARN": "arn:aws-us-gov:sns:us-gov-west-1:123456789012:test-alerts",
+        # Pinned to neutral defaults: other lambda test files set these via
+        # os.environ without restoring, and this module's tests must not
+        # inherit whatever the previous file left behind (the env-default
+        # policy branch only exists when fine-grained is false, and stray
+        # token limits break the cost-mode assertions).
+        "ENABLE_FINEGRAINED_QUOTAS": "false",
+        "MONTHLY_TOKEN_LIMIT": "0",
+        "DAILY_TOKEN_LIMIT": "0",
+        "MONTHLY_COST_LIMIT_USD": "0",
+        "DAILY_COST_LIMIT_USD": "0",
+        "WARNING_THRESHOLD_80": "0",
+        "WARNING_THRESHOLD_90": "0",
     }
     base.update(env)
     prior = {key: os.environ.get(key) for key in base}
@@ -343,3 +355,107 @@ class TestMonitorStatsCostMode:
     def test_monthly_percent_zero_when_no_limits(self):
         mod = _load_lambda("quota_monitor", {"MONTHLY_TOKEN_LIMIT": "0"})
         assert mod._monthly_usage_percent({"total_tokens": 5}, {"monthly_token_limit": 0}) == 0
+
+
+class TestDefaultPolicySeeding:
+    """Deploy-time default policy seeding must carry cost limits.
+
+    Regression: _create_default_quota_policy only wrote token fields. In cost
+    mode the profile's token limits are 0, so the seeded default:default item
+    had monthly_token_limit=0 and NO cost attributes — no limits at all — and
+    create-only seeding meant redeploys never repaired it.
+    """
+
+    def _seed(self, profile):
+        from unittest.mock import MagicMock
+
+        from claude_code_with_bedrock.cli.commands.deploy import DeployCommand
+
+        command = DeployCommand()
+        mock_manager = MagicMock()
+        with (
+            patch(
+                "claude_code_with_bedrock.cli.commands.deploy.get_stack_outputs",
+                return_value={"PoliciesTableName": "QuotaPolicies"},
+            ),
+            patch("claude_code_with_bedrock.quota_policies.QuotaPolicyManager", return_value=mock_manager),
+        ):
+            command._create_default_quota_policy(profile, "quota-stack", MagicMock())
+        return mock_manager
+
+    def _cost_profile(self):
+        return Profile(
+            name="test",
+            provider_domain="example.okta.com",
+            client_id="0oa1234567890",
+            identity_pool_name="claude-code-auth",
+            credential_storage="keyring",
+            aws_region="us-gov-west-1",
+            quota_monitoring_enabled=True,
+            quota_limit_type="cost",
+            monthly_token_limit=0,
+            monthly_cost_limit_usd=50.0,
+            daily_cost_limit_usd=5.0,
+            monthly_enforcement_mode="block",
+        )
+
+    def test_cost_mode_seeds_cost_limits(self):
+        manager = self._seed(self._cost_profile())
+
+        create_kwargs = manager.create_policy.call_args.kwargs
+        assert create_kwargs["monthly_token_limit"] == 0
+        assert create_kwargs["monthly_cost_limit"] == 50.0
+        assert create_kwargs["daily_cost_limit"] == 5.0
+
+    def test_token_mode_does_not_write_cost_attributes(self):
+        profile = self._cost_profile()
+        profile.quota_limit_type = "token"
+        profile.monthly_token_limit = 225_000_000
+        profile.monthly_cost_limit_usd = 0.0
+        profile.daily_cost_limit_usd = 0.0
+
+        manager = self._seed(profile)
+
+        create_kwargs = manager.create_policy.call_args.kwargs
+        assert create_kwargs["monthly_token_limit"] == 225_000_000
+        assert create_kwargs["monthly_cost_limit"] == 0.0
+        assert create_kwargs["daily_cost_limit"] == 0.0
+
+
+class TestQuotaPolicyDataclassCostFields:
+    """Cost budgets are first-class on the QuotaPolicy dataclass."""
+
+    def test_dynamodb_round_trip(self):
+        from decimal import Decimal
+
+        from claude_code_with_bedrock.models import PolicyType, QuotaPolicy
+
+        policy = QuotaPolicy(
+            policy_type=PolicyType.DEFAULT,
+            identifier="default",
+            monthly_token_limit=0,
+            monthly_cost_limit=50.0,
+            daily_cost_limit=5.0,
+        )
+        item = policy.to_dynamodb_item()
+        # DynamoDB rejects Python floats — budgets must be Decimal
+        assert isinstance(item["monthly_cost_limit"], Decimal)
+        assert isinstance(item["daily_cost_limit"], Decimal)
+
+        loaded = QuotaPolicy.from_dynamodb_item(item)
+        assert loaded.monthly_cost_limit == 50.0
+        assert loaded.daily_cost_limit == 5.0
+
+    def test_old_items_without_cost_attributes_default_to_zero(self):
+        from claude_code_with_bedrock.models import PolicyType, QuotaPolicy
+
+        item = QuotaPolicy(
+            policy_type=PolicyType.USER,
+            identifier="user@example.gov",
+            monthly_token_limit=100_000_000,
+        ).to_dynamodb_item()
+        assert "monthly_cost_limit" not in item  # token-only items keep their shape
+
+        loaded = QuotaPolicy.from_dynamodb_item(item)
+        assert loaded.monthly_cost_limit == 0.0
+        assert loaded.daily_cost_limit == 0.0
