@@ -611,3 +611,21 @@ class TestStaticResourceAttributes:
     def test_omitted_when_monitoring_disabled(self):
         config = self._config(self._profile(monitoring_enabled=False))
         assert "static_resource_attributes" not in config
+
+
+class TestOtelAttributesFlag:
+    """--otel-attributes validation (per-deployment bundle attributes)."""
+
+    def test_valid_pairs_accepted(self):
+        from claude_code_with_bedrock.cli.commands.package import _validate_otel_attributes_string
+
+        assert _validate_otel_attributes_string("team.id=team-a,department=platform") is None
+        assert _validate_otel_attributes_string("team.id=team-a") is None
+
+    def test_malformed_pairs_rejected(self):
+        from claude_code_with_bedrock.cli.commands.package import _validate_otel_attributes_string
+
+        assert _validate_otel_attributes_string("team-a") is not None
+        assert _validate_otel_attributes_string("team.id=") is not None
+        assert _validate_otel_attributes_string("=team-a") is not None
+        assert _validate_otel_attributes_string("team.id=a,,") is not None
