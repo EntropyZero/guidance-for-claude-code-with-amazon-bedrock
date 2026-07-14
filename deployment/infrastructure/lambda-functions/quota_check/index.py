@@ -105,6 +105,15 @@ def lambda_handler(event, context):
                 },
             )
 
+        # Persist the caller's group memberships for the scheduled monitor.
+        # quota_monitor's data source (PromQL metrics) carries only the user
+        # email — this record is the only way it can resolve group policies
+        # for alerting. Written on the JWT path only: the IAM/IDC path has no
+        # group information, and overwriting with [] there would erase what a
+        # JWT-authenticated check recorded.
+        if jwt_claims:
+            record_user_groups(email, groups)
+
         # 1. Resolve the effective quota policy for this user
         policy = resolve_quota_for_user(email, groups)
 
@@ -327,6 +336,31 @@ def extract_groups_from_claims(claims: dict) -> list:
             groups.append(f"department:{department}")
 
     return list(set(groups))  # Remove duplicates
+
+
+def record_user_groups(email: str, groups: list) -> None:
+    """Persist the user's JWT group memberships to UserQuotaMetrics.
+
+    Item: pk=USER#<email>, sk=GROUPS#CURRENT. Written on every JWT-
+    authenticated check (including an empty list, so group removals
+    propagate). Best-effort: a write failure must never fail the quota
+    check itself. TTL keeps records of departed users from accumulating.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        quota_table.update_item(
+            Key={"pk": f"USER#{email}", "sk": "GROUPS#CURRENT"},
+            UpdateExpression="SET groups_list = :groups, updated_at = :ts, #ttl = :ttl, email = :email",
+            ExpressionAttributeNames={"#ttl": "ttl"},
+            ExpressionAttributeValues={
+                ":groups": sorted(groups),
+                ":ts": now.isoformat().replace("+00:00", "Z"),
+                ":ttl": int(now.timestamp()) + (60 * 86400),
+                ":email": email,
+            },
+        )
+    except Exception as e:
+        print(f"WARNING: could not record groups for {email} (non-fatal): {e}")
 
 
 def policy_restrictiveness_key(policy: dict) -> tuple:

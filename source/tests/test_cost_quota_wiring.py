@@ -48,6 +48,18 @@ def _load_lambda(name: str, env: dict):
         "QUOTA_TABLE": "TestQuotaTable",
         "POLICIES_TABLE": "TestPoliciesTable",
         "SNS_TOPIC_ARN": "arn:aws-us-gov:sns:us-gov-west-1:123456789012:test-alerts",
+        # Pinned to neutral defaults: other lambda test files set these via
+        # os.environ without restoring, and this module's tests must not
+        # inherit whatever the previous file left behind (the env-default
+        # policy branch only exists when fine-grained is false, and stray
+        # token limits break the cost-mode assertions).
+        "ENABLE_FINEGRAINED_QUOTAS": "false",
+        "MONTHLY_TOKEN_LIMIT": "0",
+        "DAILY_TOKEN_LIMIT": "0",
+        "MONTHLY_COST_LIMIT_USD": "0",
+        "DAILY_COST_LIMIT_USD": "0",
+        "WARNING_THRESHOLD_80": "0",
+        "WARNING_THRESHOLD_90": "0",
     }
     base.update(env)
     prior = {key: os.environ.get(key) for key in base}

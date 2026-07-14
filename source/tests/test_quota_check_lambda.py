@@ -760,3 +760,76 @@ class TestGroupPolicyRestrictiveness:
         assert policy is not None
         assert policy["identifier"] == "interns"
         assert policy["monthly_cost_limit"] == 50
+
+
+class TestGroupRecording:
+    """quota_check must persist JWT group memberships for the monitor.
+
+    quota_monitor's data source (metrics) has no group information — the
+    GROUPS#CURRENT records written here are its only way to resolve group
+    policies. Regression: groups were never persisted anywhere, so the
+    monitor hard-coded groups=[] and group policies were never alerted.
+    """
+
+    def _run(self, env: dict, event: dict):
+        mod = _load_quota_check(env)
+        mod.quota_table = MagicMock()
+        mod.quota_table.get_item.return_value = {}
+        mod.policies_table = MagicMock()
+        mod.policies_table.get_item.return_value = {}
+        mod.lambda_handler(event, None)
+        return mod
+
+    def _groups_write_calls(self, mod):
+        return [
+            c
+            for c in mod.quota_table.update_item.call_args_list
+            if c.kwargs.get("Key", {}).get("sk") == "GROUPS#CURRENT"
+        ]
+
+    def test_jwt_groups_recorded(self):
+        mod = self._run(
+            {"ENABLE_FINEGRAINED_QUOTAS": "false", "MONTHLY_TOKEN_LIMIT": "40000000"},
+            _build_event(email="dev@x.com", groups=["engineering", "ai-team"]),
+        )
+
+        writes = self._groups_write_calls(mod)
+        assert len(writes) == 1
+        assert writes[0].kwargs["Key"]["pk"] == "USER#dev@x.com"
+        values = writes[0].kwargs["ExpressionAttributeValues"]
+        assert values[":groups"] == ["ai-team", "engineering"]  # sorted
+        assert values[":email"] == "dev@x.com"
+
+    def test_jwt_empty_groups_still_recorded(self):
+        """An empty list must be written so group removals propagate."""
+        mod = self._run(
+            {"ENABLE_FINEGRAINED_QUOTAS": "false", "MONTHLY_TOKEN_LIMIT": "40000000"},
+            _build_event(email="dev@x.com", groups=[]),
+        )
+        writes = self._groups_write_calls(mod)
+        assert len(writes) == 1
+        assert writes[0].kwargs["ExpressionAttributeValues"][":groups"] == []
+
+    def test_iam_path_does_not_overwrite_groups(self):
+        """The IDC/IAM path has no group info — it must not erase records."""
+        event = {
+            "requestContext": {
+                "identity": {
+                    "userArn": "arn:aws-us-gov:sts::123456789012:assumed-role/AWSReservedSSO_x/dev@x.com"
+                }
+            }
+        }
+        mod = self._run({"ENABLE_FINEGRAINED_QUOTAS": "false", "MONTHLY_TOKEN_LIMIT": "40000000"}, event)
+        assert self._groups_write_calls(mod) == []
+
+    def test_write_failure_does_not_fail_the_check(self):
+        mod = _load_quota_check({"ENABLE_FINEGRAINED_QUOTAS": "false", "MONTHLY_TOKEN_LIMIT": "40000000"})
+        mod.quota_table = MagicMock()
+        mod.quota_table.get_item.return_value = {}
+        mod.quota_table.update_item.side_effect = Exception("throttled")
+        mod.policies_table = MagicMock()
+
+        response = mod.lambda_handler(_build_event(groups=["engineering"]), None)
+
+        body = _parse(response)
+        assert body["allowed"] is True
