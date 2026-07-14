@@ -3,6 +3,7 @@ package otel
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"strings"
 
 	"ccwb-go/internal/jwt"
@@ -104,11 +105,17 @@ func ExtractUserInfoWithTagKey(claims jwt.Claims, tagKey string) UserInfo {
 		info.Department = "unspecified"
 	}
 
-	// Team
+	// Team precedence: team claim (team_id synonym) → department claim →
+	// static OTEL_RESOURCE_ATTRIBUTES team → team.id. The singular group
+	// claim and the groups array deliberately do NOT feed team — group
+	// membership belongs to Role below, and team stays claim-then-
+	// deployment-owned. Mirrored in the Python otel_helper — keep in sync.
 	info.Team = firstNonEmpty(
 		claims.GetString("team"),
 		claims.GetString("team_id"),
-		claims.GetString("group"),
+		claims.GetString("department"),
+		resourceAttrEnv("team"),
+		resourceAttrEnv("team.id"),
 	)
 	if info.Team == "" {
 		info.Team = "default-team"
@@ -143,21 +150,21 @@ func ExtractUserInfoWithTagKey(claims jwt.Claims, tagKey string) UserInfo {
 		info.Location = "remote"
 	}
 
-	// Role. Falls back to the first entry of the "groups" array claim so
-	// group-based cost attribution (dashboards aggregating by role) works for
-	// IdPs that only send group membership as an array (e.g. Okta's groups
-	// claim). Role carries the group rather than team: team.id is commonly
-	// customized per client deployment via static OTEL_RESOURCE_ATTRIBUTES,
-	// and overwriting it from claims would clobber that. Multi-group users
-	// are attributed to their first-listed group — a metric dimension can
-	// only carry one value without double-counting cost (the quota Lambdas'
-	// most-restrictive-group selection is a separate, enforcement-side
-	// concept). Mirrored in the Python otel_helper — keep in sync.
+	// Role precedence: role claim (job_title/title synonyms) → singular
+	// group claim → first entry of the groups array → static
+	// OTEL_RESOURCE_ATTRIBUTES role. Role carries the user's IdP group for
+	// group-based cost attribution (dashboards aggregating by role).
+	// Multi-group users are attributed to their first-listed group — a
+	// metric dimension carries one value without double-counting cost; the
+	// quota Lambdas' most-restrictive-group selection is a separate,
+	// enforcement-side concept. Mirrored in the Python otel_helper.
 	info.Role = firstNonEmpty(
 		claims.GetString("role"),
 		claims.GetString("job_title"),
 		claims.GetString("title"),
+		claims.GetString("group"),
 		claims.GetFirstOfList("groups"),
+		resourceAttrEnv("role"),
 	)
 	if info.Role == "" {
 		info.Role = "user"
@@ -218,6 +225,26 @@ func ExtractPrincipalTag(claims jwt.Claims, tagKey string) string {
 			if s, ok := v[0].(string); ok {
 				return s
 			}
+		}
+	}
+	return ""
+}
+
+// resourceAttrEnv returns the value of a key from the OTEL_RESOURCE_ATTRIBUTES
+// environment variable ("k=v,k=v" format), or "" when absent. The helpers run
+// inside Claude Code's environment, so the deployment's static resource
+// attributes are visible here and serve as fallbacks BELOW claim-derived
+// values — resolving the precedence at header-generation time instead of
+// relying on collector-side merge semantics.
+func resourceAttrEnv(key string) string {
+	raw := os.Getenv("OTEL_RESOURCE_ATTRIBUTES")
+	if raw == "" {
+		return ""
+	}
+	for _, pair := range strings.Split(raw, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		if ok && strings.TrimSpace(k) == key {
+			return strings.TrimSpace(v)
 		}
 	}
 	return ""

@@ -175,6 +175,21 @@ def decode_jwt_payload(token):
         return {}
 
 
+def _resource_attr_env(key):
+    """Value of a key from OTEL_RESOURCE_ATTRIBUTES ("k=v,k=v"), or "".
+
+    The helper runs inside Claude Code's environment, so the deployment's
+    static resource attributes are visible here and serve as fallbacks BELOW
+    claim-derived values (mirrors Go resourceAttrEnv — keep in sync).
+    """
+    raw = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
+    for pair in raw.split(","):
+        k, _, v = pair.strip().partition("=")
+        if k.strip() == key and v.strip():
+            return v.strip()
+    return ""
+
+
 def _first_of_list(value):
     """First non-empty string of an array claim, the value itself when it's a
     plain string, or "" otherwise (mirrors Go jwt.Claims.GetFirstOfList)."""
@@ -251,11 +266,18 @@ def extract_user_info(payload):
         or payload.get("division")
         or "unspecified"
     )
+    # Team precedence: team claim (team_id synonym) -> department claim ->
+    # static OTEL_RESOURCE_ATTRIBUTES team -> team.id. The singular group
+    # claim and the groups array deliberately do NOT feed team — group
+    # membership belongs to role below, and team stays claim-then-
+    # deployment-owned. Mirrored in the Go otel extractor — keep in sync.
     team = (
         payload.get("custom:team")
         or payload.get("team")
         or payload.get("team_id")
-        or payload.get("group")
+        or payload.get("department")
+        or _resource_attr_env("team")
+        or _resource_attr_env("team.id")
         or "default-team"
     )
     cost_center = (
@@ -273,18 +295,20 @@ def extract_user_info(payload):
         or payload.get("office")
         or "remote"
     )
-    # Role falls back to the first entry of the "groups" array claim so
-    # group-based cost attribution (dashboards aggregating by role) works for
-    # IdPs that only send group membership as an array (e.g. Okta). Role
-    # carries the group rather than team: team.id is commonly customized per
-    # client deployment via static OTEL_RESOURCE_ATTRIBUTES, and overwriting
-    # it from claims would clobber that. Mirrored in the Go otel extractor.
+    # Role precedence: role claim (job_title/title synonyms) -> singular
+    # group claim -> first entry of the groups array -> static
+    # OTEL_RESOURCE_ATTRIBUTES role. Role carries the user's IdP group for
+    # group-based cost attribution (dashboards aggregating by role);
+    # multi-group users are attributed to their first-listed group.
+    # Mirrored in the Go otel extractor — keep in sync.
     role = (
         payload.get("custom:role")
         or payload.get("role")
         or payload.get("job_title")
         or payload.get("title")
+        or payload.get("group")
         or _first_of_list(payload.get("groups"))
+        or _resource_attr_env("role")
         or "user"
     )
 
