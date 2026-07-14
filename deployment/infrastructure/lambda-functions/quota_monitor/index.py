@@ -80,6 +80,63 @@ def _promql_query(query, time_param=None):
 
 AGGREGATION_WINDOW = 900  # 15 minutes in seconds (matches EventBridge schedule)
 
+# Watermark: the fixed 15-minute lookback silently loses usage whenever a run
+# fails or is delayed (the next run only looks back 15 minutes), and a retried
+# run double-counts its whole window. Instead, each run queries
+# (last successful window end, now] and advances the watermark only AFTER the
+# usage has been written — a failed run leaves the watermark alone and the
+# next run covers the gap. Bias is deliberately no-miss: a crash between the
+# DynamoDB writes and the watermark advance re-processes that window (rare
+# over-count) rather than ever dropping usage.
+WATERMARK_MAX_CATCHUP = int(os.environ.get("WATERMARK_MAX_CATCHUP_SECONDS", "21600"))  # 6h outage cap
+WATERMARK_MIN_WINDOW = 60  # skip runs fired <60s after the last success
+
+
+def _read_watermark():
+    """Return the last successful window end (epoch seconds), or None."""
+    try:
+        item = quota_table.get_item(Key={"pk": "WATERMARK", "sk": "PROMQL"}).get("Item")
+        if item and item.get("window_end"):
+            return int(item["window_end"])
+    except Exception as e:
+        print(f"Watermark read failed (falling back to fixed {AGGREGATION_WINDOW}s window): {e}")
+    return None
+
+
+def _advance_watermark(window_end):
+    """Persist the end of the successfully processed window."""
+    try:
+        quota_table.put_item(
+            Item={
+                "pk": "WATERMARK",
+                "sk": "PROMQL",
+                "window_end": int(window_end),
+                "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            }
+        )
+    except Exception as e:
+        # Non-fatal: the next run re-processes this window (over-count, not loss).
+        print(f"Watermark write failed (next run may double-count this window): {e}")
+
+
+def _compute_window(now_epoch, watermark):
+    """Lookback seconds for this run, or None when there is nothing to process.
+
+    No watermark (first run / read failure) → the fixed schedule window.
+    Otherwise now - watermark, capped at WATERMARK_MAX_CATCHUP so a long
+    outage doesn't produce an unbounded PromQL range (usage older than the
+    cap is lost — bounded, logged loss instead of an unbounded query).
+    """
+    if watermark is None:
+        return AGGREGATION_WINDOW
+    gap = now_epoch - watermark
+    if gap < WATERMARK_MIN_WINDOW:
+        return None
+    if gap > WATERMARK_MAX_CATCHUP:
+        print(f"Watermark {gap}s behind — clamping to {WATERMARK_MAX_CATCHUP}s (older usage is lost)")
+        return WATERMARK_MAX_CATCHUP
+    return gap
+
 # Map the metric's `type` dimension values to pricing.py rate keys.
 # The CloudWatch `type` dimension is camelCase (input/output/cacheRead/
 # cacheCreation); the rate tables in shared/pricing.py are snake_case
@@ -130,25 +187,29 @@ def _usage_queries(window):
     }
 
 
-def fetch_usage_from_promql():
-    """Query PromQL for per-user token usage in the last aggregation window only.
+def fetch_usage_from_promql(window=AGGREGATION_WINDOW, time_param=None):
+    """Query PromQL for per-user token usage in the given window.
 
     See _usage_queries for the backend-specific aggregation functions and the
     temporality reasoning (sum_over_time for CloudWatch delta counters,
     increase for AMP cumulative counters).
+
+    window/time_param come from the watermark bookkeeping in lambda_handler:
+    the queries cover (time_param - window, time_param] so consecutive runs
+    tile the timeline without gaps or overlap.
     """
-    window = AGGREGATION_WINDOW
+    window = int(window or AGGREGATION_WINDOW)
     queries = _usage_queries(window)
     email_label = queries["email_label"]
 
     # Delta tokens per user in the last window
-    results = _promql_query(queries["total"])
+    results = _promql_query(queries["total"], time_param)
 
     # Delta token type AND model breakdown per user (for cost calculation)
-    type_model_results = _promql_query(queries["type_model"])
+    type_model_results = _promql_query(queries["type_model"], time_param)
 
     # Delta token type breakdown per user (without model, for backward compat)
-    type_results = _promql_query(queries["type"])
+    type_results = _promql_query(queries["type"], time_param)
 
     users = {}
     for r in results:
@@ -208,10 +269,12 @@ def fetch_usage_from_promql():
         # CoWork metrics are MetricFilter-derived per-event token counts (delta,
         # not cumulative) — use sum_over_time() for the same reason as above.
         cowork_input = _promql_query(
-            f'sum by ("user_email", "model")(sum_over_time({{"ClaudeCoWork","token.usage.input"}}[{window}s]))'
+            f'sum by ("user_email", "model")(sum_over_time({{"ClaudeCoWork","token.usage.input"}}[{window}s]))',
+            time_param,
         )
         cowork_output = _promql_query(
-            f'sum by ("user_email", "model")(sum_over_time({{"ClaudeCoWork","token.usage.output"}}[{window}s]))'
+            f'sum by ("user_email", "model")(sum_over_time({{"ClaudeCoWork","token.usage.output"}}[{window}s]))',
+            time_param,
         )
         cowork_count = 0
         for r in cowork_input + cowork_output:
@@ -345,10 +408,20 @@ def lambda_handler(event, context):
     days_remaining = days_in_month - now.day
 
     try:
-        # Step 1: Fetch delta usage from PromQL and increment DynamoDB
-        delta_data = fetch_usage_from_promql()
+        # Step 1: Fetch delta usage from PromQL and increment DynamoDB.
+        # The window is watermark-driven: (last successful window end, now].
+        # The watermark advances only after the usage is written, so a failed
+        # run leaves it untouched and the next run covers the gap (no-miss).
+        now_epoch = int(now.timestamp())
+        window = _compute_window(now_epoch, _read_watermark())
+        if window is None:
+            print("Watermark is <60s old — nothing to process this run")
+            return {"statusCode": 200, "body": "Watermark current"}
+        print(f"Querying usage window: {window}s ending at {now_epoch}")
+        delta_data = fetch_usage_from_promql(window, now_epoch)
         if delta_data:
             update_quota_metrics(delta_data)
+        _advance_watermark(now_epoch)
 
         # Step 2: Read cumulative totals from DynamoDB for threshold checking
         current_month = now.strftime("%Y-%m")

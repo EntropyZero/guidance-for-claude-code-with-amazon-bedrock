@@ -427,3 +427,68 @@ class TestLoadUserGroups:
         mod.quota_table = table
 
         assert mod.load_user_groups() == {}
+
+
+class TestWatermark:
+    """The monitor's PromQL window is watermark-driven (no gaps, no overlap).
+
+    Regression: the fixed 15-minute lookback lost a window's usage whenever a
+    run failed or was delayed, and a retried run double-counted its window.
+    """
+
+    def _mod(self, base_env, env=None):
+        return _load_quota_monitor({**base_env, **(env or {})})
+
+    def test_no_watermark_uses_schedule_window(self, base_env):
+        mod = self._mod(base_env)
+        assert mod._compute_window(1_000_000, None) == mod.AGGREGATION_WINDOW
+
+    def test_window_covers_gap_since_watermark(self, base_env):
+        mod = self._mod(base_env)
+        assert mod._compute_window(1_000_000, 1_000_000 - 2700) == 2700
+
+    def test_window_clamped_after_long_outage(self, base_env):
+        mod = self._mod(base_env)
+        assert mod._compute_window(1_000_000, 1_000_000 - 90_000) == mod.WATERMARK_MAX_CATCHUP
+
+    def test_recent_watermark_skips_run(self, base_env):
+        mod = self._mod(base_env)
+        assert mod._compute_window(1_000_000, 1_000_000 - 30) is None
+
+    def test_watermark_advances_only_after_successful_run(self, base_env):
+        mod = self._mod(base_env)
+        table = MagicMock()
+        table.get_item.return_value = {}  # no watermark yet
+        table.scan.return_value = {"Items": []}
+        table.query.return_value = {"Items": []}
+        mod.quota_table = table
+        mod.fetch_usage_from_promql = lambda window, time_param: {}
+
+        result = mod.lambda_handler({}, None)
+
+        assert result["statusCode"] == 200
+        watermark_writes = [
+            c for c in table.put_item.call_args_list if c.kwargs.get("Item", {}).get("pk") == "WATERMARK"
+        ]
+        assert len(watermark_writes) == 1
+        assert watermark_writes[0].kwargs["Item"]["sk"] == "PROMQL"
+        assert watermark_writes[0].kwargs["Item"]["window_end"] > 0
+
+    def test_watermark_not_advanced_when_fetch_fails(self, base_env):
+        mod = self._mod(base_env)
+        table = MagicMock()
+        table.get_item.return_value = {}
+        mod.quota_table = table
+
+        def boom(window, time_param):
+            raise RuntimeError("PromQL down")
+
+        mod.fetch_usage_from_promql = boom
+
+        result = mod.lambda_handler({}, None)
+
+        assert result["statusCode"] == 500
+        watermark_writes = [
+            c for c in table.put_item.call_args_list if c.kwargs.get("Item", {}).get("pk") == "WATERMARK"
+        ]
+        assert watermark_writes == []
