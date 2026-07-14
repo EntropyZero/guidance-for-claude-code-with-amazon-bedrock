@@ -134,6 +134,26 @@ class TestInitRoundTrip:
         assert quota["monthly_cost_limit"] == 75.0
         assert quota["daily_cost_limit"] == 10.0
 
+    def test_rerun_preserves_enable_finegrained_quotas(self):
+        """enable_finegrained_quotas must survive a wizard re-run.
+
+        Regression: the field was never saved by the wizard nor restored by
+        _check_existing_deployment, so it could only be enabled by hand-editing
+        the saved config — and a re-init would then silently reset it to False.
+        """
+        profile = Profile(
+            name="test",
+            provider_domain="example.okta.com",
+            client_id="0oa1234567890",
+            identity_pool_name="claude-code-auth",
+            credential_storage="keyring",
+            aws_region="us-gov-west-1",
+            quota_monitoring_enabled=True,
+            enable_finegrained_quotas=True,
+        )
+        quota = self._rebuild(profile)["quota"]
+        assert quota["enable_finegrained"] is True
+
 
 def _load_template() -> dict:
     class CFNLoader(yaml.SafeLoader):

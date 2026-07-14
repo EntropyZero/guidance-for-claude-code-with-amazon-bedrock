@@ -1366,6 +1366,21 @@ class InitCommand(Command):
                     ).ask()
                     config["quota"]["check_interval"] = int(check_interval)
 
+                    # Fine-grained quota policies (per-user/group overrides).
+                    # Deploy passes this to the quota stack; without the prompt
+                    # the profile field could only be enabled by hand-editing
+                    # the saved config.
+                    console.print("\n[bold]Fine-Grained Quota Policies[/bold]")
+                    console.print("Optional per-user and per-group limits stored in DynamoDB that")
+                    console.print("override the default limits above. Manage them after deployment")
+                    console.print("with 'ccwb quota set-user' / 'ccwb quota set-group'.")
+                    console.print("[dim]Group policies match the JWT groups claim from your identity provider.[/dim]")
+                    enable_finegrained = questionary.confirm(
+                        "Enable fine-grained quota policies?",
+                        default=config.get("quota", {}).get("enable_finegrained", False),
+                    ).ask()
+                    config["quota"]["enable_finegrained"] = enable_finegrained
+
                     # Sidecar bypass detection (opt-in compliance/audit control)
                     monitoring_mode = config.get("monitoring", {}).get("mode", "sidecar")
                     if monitoring_mode == "sidecar":
@@ -1401,6 +1416,8 @@ class InitCommand(Command):
                         console.print(f"  • Daily:   {daily_limit:,} tokens ({daily_enforcement})")
                         console.print(f"  • Burst buffer: {burst_percent}%")
                     console.print(f"  • Re-check interval: {check_interval} minutes")
+                    if config["quota"].get("enable_finegrained"):
+                        console.print("  • Fine-grained quota policies: enabled")
                     if config["quota"].get("enable_bypass_detection"):
                         console.print("  • Sidecar bypass detection: enabled")
 
@@ -2847,6 +2864,7 @@ class InitCommand(Command):
             "daily_cost_limit_usd": config_data.get("quota", {}).get("daily_cost_limit", 0),
             "monthly_enforcement_mode": config_data.get("quota", {}).get("monthly_enforcement_mode", "block"),
             "quota_check_interval": config_data.get("quota", {}).get("check_interval", 30),
+            "enable_finegrained_quotas": config_data.get("quota", {}).get("enable_finegrained", False),
             "enable_bypass_detection": config_data.get("quota", {}).get("enable_bypass_detection", False),
             "cowork_3p_enabled": config_data.get("cowork_3p", {}).get("enabled", True),
             "cowork_3p_extra_keys": config_data.get("cowork_3p", {}).get("extra_keys", {}),
@@ -3278,6 +3296,7 @@ class InitCommand(Command):
                     "monthly_cost_limit": getattr(profile, "monthly_cost_limit_usd", 0),
                     "daily_cost_limit": getattr(profile, "daily_cost_limit_usd", 0),
                     "check_interval": getattr(profile, "quota_check_interval", 30),
+                    "enable_finegrained": getattr(profile, "enable_finegrained_quotas", False),
                     "enable_bypass_detection": getattr(profile, "enable_bypass_detection", False),
                 }
 
