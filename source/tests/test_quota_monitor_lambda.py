@@ -292,3 +292,106 @@ class TestPromQLAggregationFunction:
         users = mod.fetch_usage_from_promql()
 
         assert users.get("a@b.com", {}).get("total_tokens") == 531643
+
+
+class TestLoadAllPoliciesPagination:
+    """Cost limit fields must survive DynamoDB scan pagination.
+
+    Regression: load_all_policies had the item-parsing dict duplicated inline
+    in the first-page loop and the LastEvaluatedKey continuation loop, and the
+    continuation copy dropped monthly_cost_limit/daily_cost_limit — cost
+    budgets silently vanished for any policy landing on page 2+ of the scan.
+    """
+
+    def _policy_item(self, ident: str) -> dict:
+        return {
+            "policy_type": "user",
+            "identifier": ident,
+            "sk": "CURRENT",
+            "monthly_token_limit": 0,
+            "daily_token_limit": 0,
+            "monthly_cost_limit": 500,
+            "daily_cost_limit": 50,
+            "warning_threshold_80": 0,
+            "warning_threshold_90": 0,
+            "enforcement_mode": "block",
+            "enabled": True,
+        }
+
+    def test_cost_limits_present_on_every_scan_page(self, base_env):
+        mod = _load_quota_monitor({**base_env, "ENABLE_FINEGRAINED_QUOTAS": "true"})
+
+        table = MagicMock()
+        table.scan.side_effect = [
+            {"Items": [self._policy_item("page1@x.com")], "LastEvaluatedKey": {"pk": "cursor"}},
+            {"Items": [self._policy_item("page2@x.com")]},
+        ]
+        mod.policies_table = table
+
+        policies = mod.load_all_policies()
+
+        assert set(policies) == {"user:page1@x.com", "user:page2@x.com"}
+        for key, policy in policies.items():
+            assert policy["monthly_cost_limit"] == 500, f"{key} lost monthly_cost_limit"
+            assert policy["daily_cost_limit"] == 50, f"{key} lost daily_cost_limit"
+
+    def test_page_shapes_are_identical(self, base_env):
+        """Every page must produce the same policy dict shape (same keys)."""
+        mod = _load_quota_monitor({**base_env, "ENABLE_FINEGRAINED_QUOTAS": "true"})
+
+        table = MagicMock()
+        table.scan.side_effect = [
+            {"Items": [self._policy_item("page1@x.com")], "LastEvaluatedKey": {"pk": "cursor"}},
+            {"Items": [self._policy_item("page2@x.com")]},
+        ]
+        mod.policies_table = table
+
+        policies = mod.load_all_policies()
+
+        assert set(policies["user:page1@x.com"]) == set(policies["user:page2@x.com"])
+
+
+class TestGroupPolicyRestrictiveness:
+    """Most-restrictive group selection must account for cost-based policies.
+
+    Mirror of the quota_check tests — the two lambdas duplicate the
+    restrictiveness key and must stay in sync.
+    """
+
+    def _cost_policy(self, ident: str, monthly_cost: float) -> dict:
+        return {
+            "policy_type": "group", "identifier": ident,
+            "monthly_token_limit": 0, "daily_token_limit": None,
+            "monthly_cost_limit": monthly_cost, "daily_cost_limit": 0,
+            "warning_threshold_80": 0, "warning_threshold_90": 0,
+            "enforcement_mode": "block", "enabled": True,
+        }
+
+    def test_resolve_user_quota_selects_lowest_cost_group(self, base_env):
+        mod = _load_quota_monitor({**base_env, "ENABLE_FINEGRAINED_QUOTAS": "true"})
+        cache = {
+            "group:engineering": self._cost_policy("engineering", 500),
+            "group:interns": self._cost_policy("interns", 50),
+        }
+
+        policy = mod.resolve_user_quota("dev@x.com", ["engineering", "interns"], cache)
+
+        assert policy["identifier"] == "interns"
+
+    def test_zero_token_limit_is_not_most_restrictive(self, base_env):
+        mod = _load_quota_monitor({**base_env, "ENABLE_FINEGRAINED_QUOTAS": "true"})
+        token_policy = {
+            "policy_type": "group", "identifier": "engineering",
+            "monthly_token_limit": 100_000_000, "daily_token_limit": None,
+            "monthly_cost_limit": 0, "daily_cost_limit": 0,
+            "warning_threshold_80": 0, "warning_threshold_90": 0,
+            "enforcement_mode": "block", "enabled": True,
+        }
+        cache = {
+            "group:engineering": token_policy,
+            "group:unlimited": {**token_policy, "identifier": "unlimited", "monthly_token_limit": 0},
+        }
+
+        policy = mod.resolve_user_quota("dev@x.com", ["engineering", "unlimited"], cache)
+
+        assert policy["identifier"] == "engineering"

@@ -422,6 +422,27 @@ def lambda_handler(event, context):
         return {"statusCode": 500, "body": json.dumps(f"Error: {e}")}
 
 
+def _parse_policy_item(item):
+    """Parse one QuotaPolicies item into the policy dict shape.
+
+    Single parser for every scan page — the first page and the
+    LastEvaluatedKey continuation previously had duplicated inline dicts,
+    and the continuation copy silently dropped the cost limit fields, so
+    cost budgets vanished for any policy landing on page 2+ of the scan.
+    """
+    return {
+        "policy_type": item.get("policy_type"), "identifier": item.get("identifier"),
+        "monthly_token_limit": int(item.get("monthly_token_limit", 0)),
+        "daily_token_limit": int(item.get("daily_token_limit", 0)) if item.get("daily_token_limit") else None,
+        "monthly_cost_limit": float(item.get("monthly_cost_limit", 0) or 0),
+        "daily_cost_limit": float(item.get("daily_cost_limit", 0) or 0),
+        "warning_threshold_80": int(item.get("warning_threshold_80", 0)),
+        "warning_threshold_90": int(item.get("warning_threshold_90", 0)),
+        "enforcement_mode": item.get("enforcement_mode", "alert"),
+        "enabled": item.get("enabled", True),
+    }
+
+
 def load_all_policies():
     """Load all quota policies from QuotaPolicies table."""
     policies = {}
@@ -429,37 +450,43 @@ def load_all_policies():
         return policies
     try:
         response = policies_table.scan(FilterExpression=Attr("sk").eq("CURRENT"))
-        for item in response.get("Items", []):
-            pt, ident = item.get("policy_type"), item.get("identifier")
-            if pt and ident:
-                policies[f"{pt}:{ident}"] = {
-                    "policy_type": pt, "identifier": ident,
-                    "monthly_token_limit": int(item.get("monthly_token_limit", 0)),
-                    "daily_token_limit": int(item.get("daily_token_limit", 0)) if item.get("daily_token_limit") else None,
-                    "monthly_cost_limit": float(item.get("monthly_cost_limit", 0) or 0),
-                    "daily_cost_limit": float(item.get("daily_cost_limit", 0) or 0),
-                    "warning_threshold_80": int(item.get("warning_threshold_80", 0)),
-                    "warning_threshold_90": int(item.get("warning_threshold_90", 0)),
-                    "enforcement_mode": item.get("enforcement_mode", "alert"),
-                    "enabled": item.get("enabled", True),
-                }
-        while "LastEvaluatedKey" in response:
-            response = policies_table.scan(FilterExpression=Attr("sk").eq("CURRENT"), ExclusiveStartKey=response["LastEvaluatedKey"])
+        while True:
             for item in response.get("Items", []):
                 pt, ident = item.get("policy_type"), item.get("identifier")
                 if pt and ident:
-                    policies[f"{pt}:{ident}"] = {
-                        "policy_type": pt, "identifier": ident,
-                        "monthly_token_limit": int(item.get("monthly_token_limit", 0)),
-                        "daily_token_limit": int(item.get("daily_token_limit", 0)) if item.get("daily_token_limit") else None,
-                        "warning_threshold_80": int(item.get("warning_threshold_80", 0)),
-                        "warning_threshold_90": int(item.get("warning_threshold_90", 0)),
-                        "enforcement_mode": item.get("enforcement_mode", "alert"),
-                        "enabled": item.get("enabled", True),
-                    }
+                    policies[f"{pt}:{ident}"] = _parse_policy_item(item)
+            if "LastEvaluatedKey" not in response:
+                break
+            response = policies_table.scan(
+                FilterExpression=Attr("sk").eq("CURRENT"), ExclusiveStartKey=response["LastEvaluatedKey"]
+            )
     except Exception as e:
         print(f"Error loading policies: {e}")
     return policies
+
+
+def _policy_restrictiveness_key(policy):
+    """Sort key for "most restrictive" group policy selection.
+
+    A limit of 0/None means "no limit in that denomination" and must sort as
+    infinity. The old key sorted by raw monthly_token_limit, which was doubly
+    wrong for cost-based policies: their token limit of 0 made them the "most
+    restrictive" of any token policy, and their cost budgets were never
+    compared at all. Token limits compare first; among policies with no token
+    limit (cost mode) the lowest monthly cost budget wins; daily cost breaks
+    ties. Mixed-denomination sets deterministically pick the token-limited
+    policy.
+
+    Mirrored in quota_check/index.py (policy_restrictiveness_key) — keep in sync.
+    """
+    token_limit = int(policy.get("monthly_token_limit") or 0)
+    monthly_cost = float(policy.get("monthly_cost_limit") or 0)
+    daily_cost = float(policy.get("daily_cost_limit") or 0)
+    return (
+        token_limit if token_limit > 0 else float("inf"),
+        monthly_cost if monthly_cost > 0 else float("inf"),
+        daily_cost if daily_cost > 0 else float("inf"),
+    )
 
 
 def resolve_user_quota(email, groups, policies_cache):
@@ -478,7 +505,7 @@ def resolve_user_quota(email, groups, policies_cache):
     group_policies = [policies_cache[f"group:{g}"] for g in (groups or [])
                       if f"group:{g}" in policies_cache and policies_cache[f"group:{g}"].get("enabled")]
     if group_policies:
-        return min(group_policies, key=lambda p: p["monthly_token_limit"])
+        return min(group_policies, key=_policy_restrictiveness_key)
     default_key = "default:default"
     if default_key in policies_cache and policies_cache[default_key].get("enabled"):
         return policies_cache[default_key]

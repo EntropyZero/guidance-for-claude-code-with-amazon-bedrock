@@ -677,3 +677,86 @@ class TestCostBasedEnforcement:
         body = _parse(mod.lambda_handler(_build_event(), None))
         assert body["allowed"] is False
         assert body["reason"] == "daily_cost_exceeded"
+
+
+class TestGroupPolicyRestrictiveness:
+    """Most-restrictive group selection must account for cost-based policies.
+
+    Regression: selection was min() by raw monthly_token_limit, which ignored
+    cost budgets entirely AND sorted a cost-only policy (token limit 0) as
+    the most restrictive of any token policy.
+    """
+
+    def _cost_policy(self, ident: str, monthly_cost: float, daily_cost: float = 0) -> dict:
+        return {
+            "policy_type": "group",
+            "identifier": ident,
+            "monthly_token_limit": 0,
+            "daily_token_limit": None,
+            "monthly_cost_limit": monthly_cost,
+            "daily_cost_limit": daily_cost,
+            "warning_threshold_80": 0,
+            "warning_threshold_90": 0,
+            "enforcement_mode": "block",
+            "daily_enforcement_mode": "alert",
+            "enabled": True,
+        }
+
+    def _token_policy(self, ident: str, monthly_tokens: int) -> dict:
+        return {
+            "policy_type": "group",
+            "identifier": ident,
+            "monthly_token_limit": monthly_tokens,
+            "daily_token_limit": None,
+            "monthly_cost_limit": 0,
+            "daily_cost_limit": 0,
+            "warning_threshold_80": 0,
+            "warning_threshold_90": 0,
+            "enforcement_mode": "block",
+            "daily_enforcement_mode": "alert",
+            "enabled": True,
+        }
+
+    def test_lowest_cost_budget_wins_among_cost_policies(self):
+        mod = _load_quota_check({"ENABLE_FINEGRAINED_QUOTAS": "true"})
+        policies = [
+            self._cost_policy("engineering", 500),
+            self._cost_policy("interns", 50),
+            self._cost_policy("research", 200),
+        ]
+        chosen = min(policies, key=mod.policy_restrictiveness_key)
+        assert chosen["identifier"] == "interns"
+
+    def test_zero_token_limit_is_not_most_restrictive(self):
+        """A policy with token limit 0 (no token limit) must not beat a real limit."""
+        mod = _load_quota_check({"ENABLE_FINEGRAINED_QUOTAS": "true"})
+        policies = [
+            self._token_policy("engineering", 100_000_000),
+            self._token_policy("unlimited", 0),
+        ]
+        chosen = min(policies, key=mod.policy_restrictiveness_key)
+        assert chosen["identifier"] == "engineering"
+
+    def test_daily_cost_breaks_monthly_tie(self):
+        mod = _load_quota_check({"ENABLE_FINEGRAINED_QUOTAS": "true"})
+        policies = [
+            self._cost_policy("loose", 200, daily_cost=0),
+            self._cost_policy("tight", 200, daily_cost=20),
+        ]
+        chosen = min(policies, key=mod.policy_restrictiveness_key)
+        assert chosen["identifier"] == "tight"
+
+    def test_resolve_quota_for_user_selects_lowest_cost_group(self):
+        """End-to-end through resolve_quota_for_user with mocked policy reads."""
+        mod = _load_quota_check({"ENABLE_FINEGRAINED_QUOTAS": "true", "MONTHLY_TOKEN_LIMIT": "0", "MONTHLY_COST_LIMIT_USD": "0"})
+        by_group = {
+            "engineering": self._cost_policy("engineering", 500),
+            "interns": self._cost_policy("interns", 50),
+        }
+        mod.get_policy = lambda ptype, ident: by_group.get(ident) if ptype == "group" else None
+
+        policy = mod.resolve_quota_for_user("dev@x.com", ["engineering", "interns"])
+
+        assert policy is not None
+        assert policy["identifier"] == "interns"
+        assert policy["monthly_cost_limit"] == 50

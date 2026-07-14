@@ -166,6 +166,10 @@ Behavior:
 
 Fine-grained quotas allow administrators to set different limits for different users and groups, with a clear precedence hierarchy.
 
+Enable them by answering yes to "Enable fine-grained quota policies?" in the
+`ccwb init` quota section, then re-run `ccwb deploy quota` so the Lambdas
+receive `ENABLE_FINEGRAINED_QUOTAS=true`.
+
 ### Policy Types
 
 1. **User Policies**: Apply to a specific user by email address
@@ -177,7 +181,7 @@ Fine-grained quotas allow administrators to set different limits for different u
 When determining the effective quota for a user:
 
 1. **User-specific policy** (highest priority): If a policy exists for the user's email, use it
-2. **Group policy** (most restrictive): If user belongs to multiple groups with policies, use the **lowest limit** (most restrictive)
+2. **Group policy** (most restrictive): If user belongs to multiple groups with policies, use the most restrictive one — the lowest monthly token limit, or for cost-based policies (token limit 0) the lowest monthly cost budget. A limit of 0 means "no limit in that denomination" and is treated as least restrictive, and mixed token/cost policy sets pick the token-limited policy.
 3. **Default policy**: If no user or group policy applies, use the default
 4. **No policy**: If no policies are defined, usage is **unlimited** (quota monitoring disabled for that user)
 
