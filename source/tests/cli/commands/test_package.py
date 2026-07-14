@@ -84,6 +84,60 @@ class TestPackageCommandCrossRegion:
             # Should default to 'us'
             assert config["ClaudeCode"]["cross_region_profile"] == "us"
 
+    def test_config_includes_okta_auth_server_when_set(self):
+        """okta_auth_server must ship in config.json under BOTH helper keys.
+
+        The Go binary reads okta_auth_server_id; the Python credential provider
+        reads okta_auth_server. If neither is written, both helpers silently
+        fall back to the Org Authorization Server while the quota JWT
+        authorizer (deploy.py) follows the profile — the issuer mismatch 401s
+        every quota check before the Lambda is invoked.
+        """
+        command = PackageCommand()
+
+        profile = Profile(
+            name="test",
+            provider_domain="test.okta.com",
+            client_id="test-client-id",
+            credential_storage="keyring",
+            aws_region="us-east-1",
+            identity_pool_name="test-pool",
+            allowed_bedrock_regions=["us-east-1"],
+            monitoring_enabled=False,
+            okta_auth_server="default",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = command._create_config(Path(tmpdir), profile, "test-identity-pool-id")
+            with open(config_path, encoding="utf-8") as f:
+                config = json.load(f)
+
+        assert config["ClaudeCode"]["okta_auth_server_id"] == "default"
+        assert config["ClaudeCode"]["okta_auth_server"] == "default"
+
+    def test_config_omits_okta_auth_server_when_unset(self):
+        """Org AS profiles (okta_auth_server='') must not write the keys at all."""
+        command = PackageCommand()
+
+        profile = Profile(
+            name="test",
+            provider_domain="test.okta.com",
+            client_id="test-client-id",
+            credential_storage="keyring",
+            aws_region="us-east-1",
+            identity_pool_name="test-pool",
+            allowed_bedrock_regions=["us-east-1"],
+            monitoring_enabled=False,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = command._create_config(Path(tmpdir), profile, "test-identity-pool-id")
+            with open(config_path, encoding="utf-8") as f:
+                config = json.load(f)
+
+        assert "okta_auth_server_id" not in config["ClaudeCode"]
+        assert "okta_auth_server" not in config["ClaudeCode"]
+
     def test_installer_script_preserves_region(self):
         """Test that installer script correctly extracts region from config."""
         command = PackageCommand()
