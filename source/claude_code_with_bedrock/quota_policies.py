@@ -141,6 +141,8 @@ class QuotaPolicyManager:
         created_by: str | None = None,
         monthly_cost_limit: float = 0.0,
         daily_cost_limit: float = 0.0,
+        cost_warning_threshold_80: float | None = None,
+        cost_warning_threshold_90: float | None = None,
     ) -> QuotaPolicy:
         """Create a new quota policy.
 
@@ -182,6 +184,8 @@ class QuotaPolicyManager:
             daily_token_limit=daily_token_limit,
             monthly_cost_limit=monthly_cost_limit or 0.0,
             daily_cost_limit=daily_cost_limit or 0.0,
+            cost_warning_threshold_80=cost_warning_threshold_80,
+            cost_warning_threshold_90=cost_warning_threshold_90,
             warning_threshold_80=warning_threshold_80,
             warning_threshold_90=warning_threshold_90,
             enforcement_mode=enforcement_mode,
@@ -244,6 +248,8 @@ class QuotaPolicyManager:
         enabled: bool | None = None,
         monthly_cost_limit: float | None = None,
         daily_cost_limit: float | None = None,
+        cost_warning_threshold_80: float | None = None,
+        cost_warning_threshold_90: float | None = None,
     ) -> QuotaPolicy:
         """Update an existing policy.
 
@@ -319,10 +325,25 @@ class QuotaPolicyManager:
         if monthly_cost_limit is not None:
             update_parts.append("monthly_cost_limit = :mcl")
             expression_values[":mcl"] = Decimal(str(monthly_cost_limit))
+            # Auto-recalculate the cost warning ladder from the new budget
+            # unless explicit thresholds accompany it (same convention as the
+            # token thresholds above).
+            if cost_warning_threshold_80 is None:
+                cost_warning_threshold_80 = round(monthly_cost_limit * 0.8, 2)
+            if cost_warning_threshold_90 is None:
+                cost_warning_threshold_90 = round(monthly_cost_limit * 0.9, 2)
 
         if daily_cost_limit is not None:
             update_parts.append("daily_cost_limit = :dcl")
             expression_values[":dcl"] = Decimal(str(daily_cost_limit))
+
+        if cost_warning_threshold_80 is not None:
+            update_parts.append("cost_warning_threshold_80 = :cw80")
+            expression_values[":cw80"] = Decimal(str(cost_warning_threshold_80))
+
+        if cost_warning_threshold_90 is not None:
+            update_parts.append("cost_warning_threshold_90 = :cw90")
+            expression_values[":cw90"] = Decimal(str(cost_warning_threshold_90))
 
         pk = self._make_pk(policy_type, identifier)
 

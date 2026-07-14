@@ -234,3 +234,18 @@ class TestCostOnlyPolicies:
         # Error prints via rich Console (real stdout), not cleo's captured io
         assert "--monthly-limit or --budget is required" in capsys.readouterr().out
         mock_manager.create_policy.assert_not_called()
+
+    @patch("claude_code_with_bedrock.cli.commands.quota._get_quota_manager")
+    @patch("claude_code_with_bedrock.cli.commands.quota.Config")
+    def test_cost_warning_thresholds_passed_through(self, mock_config_cls, mock_get_manager):
+        """--cost-warning-80/-90 reach create_policy as dollar thresholds."""
+        mock_manager = self._mock_manager(mock_config_cls, mock_get_manager)
+
+        app = create_application()
+        tester = ApplicationTester(app)
+        tester.execute("quota set-default --budget 100 --cost-warning-80 20 --cost-warning-90 90")
+
+        assert tester.status_code == 0
+        kwargs = mock_manager.create_policy.call_args.kwargs
+        assert kwargs["cost_warning_threshold_80"] == 20.0
+        assert kwargs["cost_warning_threshold_90"] == 90.0
