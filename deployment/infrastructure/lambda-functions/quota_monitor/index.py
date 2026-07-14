@@ -429,6 +429,30 @@ def load_all_policies():
     return policies
 
 
+def _policy_restrictiveness_key(policy):
+    """Sort key for "most restrictive" group policy selection.
+
+    A limit of 0/None means "no limit in that denomination" and must sort as
+    infinity. The old key sorted by raw monthly_token_limit, which was doubly
+    wrong for cost-based policies: their token limit of 0 made them the "most
+    restrictive" of any token policy, and their cost budgets were never
+    compared at all. Token limits compare first; among policies with no token
+    limit (cost mode) the lowest monthly cost budget wins; daily cost breaks
+    ties. Mixed-denomination sets deterministically pick the token-limited
+    policy.
+
+    Mirrored in quota_check/index.py (policy_restrictiveness_key) — keep in sync.
+    """
+    token_limit = int(policy.get("monthly_token_limit") or 0)
+    monthly_cost = float(policy.get("monthly_cost_limit") or 0)
+    daily_cost = float(policy.get("daily_cost_limit") or 0)
+    return (
+        token_limit if token_limit > 0 else float("inf"),
+        monthly_cost if monthly_cost > 0 else float("inf"),
+        daily_cost if daily_cost > 0 else float("inf"),
+    )
+
+
 def resolve_user_quota(email, groups, policies_cache):
     """Resolve effective quota policy: user > group > default > env defaults."""
     if not ENABLE_FINEGRAINED_QUOTAS:
@@ -445,7 +469,7 @@ def resolve_user_quota(email, groups, policies_cache):
     group_policies = [policies_cache[f"group:{g}"] for g in (groups or [])
                       if f"group:{g}" in policies_cache and policies_cache[f"group:{g}"].get("enabled")]
     if group_policies:
-        return min(group_policies, key=lambda p: p["monthly_token_limit"])
+        return min(group_policies, key=_policy_restrictiveness_key)
     default_key = "default:default"
     if default_key in policies_cache and policies_cache[default_key].get("enabled"):
         return policies_cache[default_key]

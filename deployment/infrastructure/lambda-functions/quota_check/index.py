@@ -329,6 +329,30 @@ def extract_groups_from_claims(claims: dict) -> list:
     return list(set(groups))  # Remove duplicates
 
 
+def policy_restrictiveness_key(policy: dict) -> tuple:
+    """Sort key for "most restrictive" group policy selection.
+
+    A limit of 0/None means "no limit in that denomination" and must sort as
+    infinity. The old key sorted by raw monthly_token_limit, which was doubly
+    wrong for cost-based policies: their token limit of 0 made them the "most
+    restrictive" of any token policy, and their cost budgets were never
+    compared at all — a user in several cost-limited groups got an arbitrary
+    one. Token limits compare first; among policies with no token limit
+    (cost mode) the lowest monthly cost budget wins; daily cost breaks ties.
+    Mixed-denomination sets deterministically pick the token-limited policy.
+
+    Mirrored in quota_monitor/index.py (_policy_restrictiveness_key) — keep in sync.
+    """
+    token_limit = int(policy.get("monthly_token_limit") or 0)
+    monthly_cost = float(policy.get("monthly_cost_limit") or 0)
+    daily_cost = float(policy.get("daily_cost_limit") or 0)
+    return (
+        token_limit if token_limit > 0 else float("inf"),
+        monthly_cost if monthly_cost > 0 else float("inf"),
+        daily_cost if daily_cost > 0 else float("inf"),
+    )
+
+
 def resolve_quota_for_user(email: str, groups: list) -> dict | None:
     """
     Resolve the effective quota policy for a user.
@@ -370,8 +394,7 @@ def resolve_quota_for_user(email: str, groups: list) -> dict | None:
                 group_policies.append(group_policy)
 
         if group_policies:
-            # Most restrictive = lowest monthly_token_limit
-            return min(group_policies, key=lambda p: p.get("monthly_token_limit", float("inf")))
+            return min(group_policies, key=policy_restrictiveness_key)
 
     # 3. Fall back to default policy
     default_policy = get_policy("default", "default")
