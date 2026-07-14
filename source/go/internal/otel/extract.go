@@ -104,18 +104,14 @@ func ExtractUserInfoWithTagKey(claims jwt.Claims, tagKey string) UserInfo {
 		info.Department = "unspecified"
 	}
 
-	// Team. Falls back to the first entry of the "groups" array claim so
-	// group-based cost attribution (dashboards aggregating by team.id) works
-	// for IdPs that only send group membership as an array (e.g. Okta's
-	// groups claim) — previously such users all collapsed to "default-team".
-	// Multi-group users are attributed to their first-listed group: metric
-	// dimensions can only carry one value without double-counting cost.
-	// Mirrored in the Python otel_helper — keep in sync.
+	// Team. Deliberately does NOT read the "groups" array claim — team.id is
+	// commonly customized per client deployment via static
+	// OTEL_RESOURCE_ATTRIBUTES, and claim-derived values would clobber it.
+	// The groups array feeds the Role attribute below instead.
 	info.Team = firstNonEmpty(
 		claims.GetString("team"),
 		claims.GetString("team_id"),
 		claims.GetString("group"),
-		claims.GetFirstOfList("groups"),
 	)
 	if info.Team == "" {
 		info.Team = "default-team"
@@ -150,11 +146,21 @@ func ExtractUserInfoWithTagKey(claims jwt.Claims, tagKey string) UserInfo {
 		info.Location = "remote"
 	}
 
-	// Role
+	// Role. Falls back to the first entry of the "groups" array claim so
+	// group-based cost attribution (dashboards aggregating by role) works for
+	// IdPs that only send group membership as an array (e.g. Okta's groups
+	// claim). Role carries the group rather than team: team.id is commonly
+	// customized per client deployment via static OTEL_RESOURCE_ATTRIBUTES,
+	// and overwriting it from claims would clobber that. Multi-group users
+	// are attributed to their first-listed group — a metric dimension can
+	// only carry one value without double-counting cost (the quota Lambdas'
+	// most-restrictive-group selection is a separate, enforcement-side
+	// concept). Mirrored in the Python otel_helper — keep in sync.
 	info.Role = firstNonEmpty(
 		claims.GetString("role"),
 		claims.GetString("job_title"),
 		claims.GetString("title"),
+		claims.GetFirstOfList("groups"),
 	)
 	if info.Role == "" {
 		info.Role = "user"

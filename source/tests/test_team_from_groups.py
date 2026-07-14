@@ -1,11 +1,12 @@
-# ABOUTME: Tests for team attribution falling back to the groups array claim
-# ABOUTME: Mirrors Go otel extract tests — group-based cost dashboards need team.id populated
+# ABOUTME: Tests for role attribution falling back to the groups array claim
+# ABOUTME: Mirrors Go otel extract tests — group-based cost dashboards aggregate by role
 
-"""Team must fall back to the first "groups" array entry (parity with Go).
+"""Role must fall back to the first "groups" array entry (parity with Go).
 
-IdPs like Okta send group membership as an array; without this fallback every
-such user collapsed to "default-team" and per-group cost aggregation on
-dashboards showed a single meaningless bucket.
+IdPs like Okta send group membership as an array. The group lands in the ROLE
+attribute (not team): team.id is commonly customized per client deployment via
+static OTEL_RESOURCE_ATTRIBUTES, and overwriting it from claims would clobber
+that deployment-owned value.
 """
 
 import importlib.util
@@ -20,20 +21,29 @@ _spec.loader.exec_module(_module)
 extract_user_info = _module.extract_user_info
 
 
-class TestTeamFromGroupsArray:
-    def test_first_groups_entry_used(self):
+class TestRoleFromGroupsArray:
+    def test_first_groups_entry_used_for_role(self):
         result = extract_user_info({"email": "dev@corp.com", "groups": ["engineering", "ai-team"]})
-        assert result["team"] == "engineering"
+        assert result["role"] == "engineering"
 
-    def test_singular_team_claim_wins(self):
-        result = extract_user_info({"team": "platform", "groups": ["engineering"]})
-        assert result["team"] == "platform"
+    def test_groups_do_not_feed_team(self):
+        """team.id stays deployment-owned — groups must not clobber it."""
+        result = extract_user_info({"email": "dev@corp.com", "groups": ["engineering"]})
+        assert result["team"] == "default-team"
+
+    def test_singular_role_claim_wins(self):
+        result = extract_user_info({"role": "developer", "groups": ["engineering"]})
+        assert result["role"] == "developer"
+
+    def test_title_claim_wins_over_groups(self):
+        result = extract_user_info({"title": "engineer-ii", "groups": ["engineering"]})
+        assert result["role"] == "engineer-ii"
 
     def test_empty_groups_falls_back_to_default(self):
-        assert extract_user_info({"groups": []})["team"] == "default-team"
+        assert extract_user_info({"groups": []})["role"] == "user"
 
     def test_non_string_groups_entries_skipped(self):
-        assert extract_user_info({"groups": [42, False, "ai-team"]})["team"] == "ai-team"
+        assert extract_user_info({"groups": [42, False, "ai-team"]})["role"] == "ai-team"
 
     def test_string_groups_claim_used_verbatim(self):
-        assert extract_user_info({"groups": "engineering"})["team"] == "engineering"
+        assert extract_user_info({"groups": "engineering"})["role"] == "engineering"

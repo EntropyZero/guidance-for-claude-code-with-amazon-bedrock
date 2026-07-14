@@ -324,10 +324,11 @@ func TestExtractUserInfoWithTagKey_CustomKeyIgnoresDefaultClaim(t *testing.T) {
 	}
 }
 
-// TestExtractUserInfo_TeamFromGroupsArray verifies the team falls back to the
+// TestExtractUserInfo_RoleFromGroupsArray verifies the role falls back to the
 // first entry of the "groups" array claim (e.g. Okta) so group-based cost
-// attribution works when no singular team/group claim is present.
-func TestExtractUserInfo_TeamFromGroupsArray(t *testing.T) {
+// attribution works. Role carries the group (not team): team.id is commonly
+// customized per client deployment via static OTEL_RESOURCE_ATTRIBUTES.
+func TestExtractUserInfo_RoleFromGroupsArray(t *testing.T) {
 	claims := jwt.Claims{
 		"email":  "dev@corp.com",
 		"groups": []interface{}{"engineering", "ai-team"},
@@ -335,23 +336,26 @@ func TestExtractUserInfo_TeamFromGroupsArray(t *testing.T) {
 
 	info := ExtractUserInfo(claims)
 
-	if info.Team != "engineering" {
-		t.Errorf("Team = %q, want engineering (first groups entry)", info.Team)
+	if info.Role != "engineering" {
+		t.Errorf("Role = %q, want engineering (first groups entry)", info.Role)
+	}
+	if info.Team != "default-team" {
+		t.Errorf("Team = %q, want default-team (groups must NOT feed team)", info.Team)
 	}
 }
 
-// TestExtractUserInfo_SingularTeamBeatsGroupsArray keeps the existing claim
-// priority: an explicit team claim wins over the groups array.
-func TestExtractUserInfo_SingularTeamBeatsGroupsArray(t *testing.T) {
+// TestExtractUserInfo_SingularRoleBeatsGroupsArray keeps the existing claim
+// priority: explicit role/title claims win over the groups array.
+func TestExtractUserInfo_SingularRoleBeatsGroupsArray(t *testing.T) {
 	claims := jwt.Claims{
-		"team":   "platform",
+		"role":   "developer",
 		"groups": []interface{}{"engineering"},
 	}
 
 	info := ExtractUserInfo(claims)
 
-	if info.Team != "platform" {
-		t.Errorf("Team = %q, want platform (singular claim wins)", info.Team)
+	if info.Role != "developer" {
+		t.Errorf("Role = %q, want developer (singular claim wins)", info.Role)
 	}
 }
 
@@ -364,8 +368,8 @@ func TestExtractUserInfo_EmptyGroupsArrayFallsBackToDefault(t *testing.T) {
 	} {
 		claims := jwt.Claims{"groups": groups}
 		info := ExtractUserInfo(claims)
-		if info.Team != "default-team" {
-			t.Errorf("%s: Team = %q, want default-team", name, info.Team)
+		if info.Role != "user" {
+			t.Errorf("%s: Role = %q, want user", name, info.Role)
 		}
 	}
 }

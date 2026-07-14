@@ -251,16 +251,15 @@ def extract_user_info(payload):
         or payload.get("division")
         or "unspecified"
     )
-    # Team falls back to the first entry of the "groups" array claim so
-    # group-based cost attribution (dashboards aggregating by team.id) works
-    # for IdPs that only send group membership as an array (e.g. Okta's
-    # groups claim). Mirrored in the Go otel extractor — keep in sync.
+    # Team deliberately does NOT read the "groups" array claim — team.id is
+    # commonly customized per client deployment via static
+    # OTEL_RESOURCE_ATTRIBUTES, and claim-derived values would clobber it.
+    # The groups array feeds the role attribute below instead.
     team = (
         payload.get("custom:team")
         or payload.get("team")
         or payload.get("team_id")
         or payload.get("group")
-        or _first_of_list(payload.get("groups"))
         or "default-team"
     )
     cost_center = (
@@ -278,8 +277,19 @@ def extract_user_info(payload):
         or payload.get("office")
         or "remote"
     )
+    # Role falls back to the first entry of the "groups" array claim so
+    # group-based cost attribution (dashboards aggregating by role) works for
+    # IdPs that only send group membership as an array (e.g. Okta). Role
+    # carries the group rather than team: team.id is commonly customized per
+    # client deployment via static OTEL_RESOURCE_ATTRIBUTES, and overwriting
+    # it from claims would clobber that. Mirrored in the Go otel extractor.
     role = (
-        payload.get("custom:role") or payload.get("role") or payload.get("job_title") or payload.get("title") or "user"
+        payload.get("custom:role")
+        or payload.get("role")
+        or payload.get("job_title")
+        or payload.get("title")
+        or _first_of_list(payload.get("groups"))
+        or "user"
     )
 
     # AWS Session Tags — generic extraction from https://aws.amazon.com/tags claim.
