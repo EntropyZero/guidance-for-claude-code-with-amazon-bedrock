@@ -863,6 +863,21 @@ class InitCommand(Command):
                         f"as a redirect URI in your IdP application.[/dim]"
                     )
 
+            # Optional extra OAuth scopes appended to the provider defaults —
+            # e.g. "groups" so Okta includes the groups claim that group-based
+            # quota policies match on. Opt-in: IdPs reject scopes they don't
+            # define (Okta Custom AS fails the whole sign-in with
+            # invalid_scope), so blank keeps the provider defaults.
+            console.print("\n[cyan]Additional OAuth Scopes[/cyan]")
+            console.print("Extra scopes appended to the provider defaults (openid profile email).")
+            console.print("Example: [cyan]groups[/cyan] — needed for group-based quota policies with Okta.")
+            console.print("[dim]Leave blank to request only the provider defaults.[/dim]")
+            oidc_additional_scopes = questionary.text(
+                "Additional scopes (space-separated, blank for none):",
+                default=config.get("oidc_additional_scopes", ""),
+            ).ask()
+            config["oidc_additional_scopes"] = (oidc_additional_scopes or "").strip()
+
             # Preserve existing okta settings, only update domain/client_id
             if "okta" not in config:
                 config["okta"] = {}
@@ -2873,6 +2888,7 @@ class InitCommand(Command):
             "idc_permission_set_name": config_data.get("idc_permission_set_name"),
             "sso_region": config_data.get("sso_region"),
             "azure_auth_mode": config_data.get("azure_auth_mode"),
+            "oidc_additional_scopes": config_data.get("oidc_additional_scopes", ""),
             "client_certificate_path": config_data.get("client_certificate_path"),
             "client_certificate_key_path": config_data.get("client_certificate_key_path"),
             "enable_codebuild": config_data.get("codebuild", {}).get("enabled", False),
@@ -3352,6 +3368,11 @@ class InitCommand(Command):
             # client_secret is never written to config — it lives in the OS keyring
             if getattr(profile, "azure_auth_mode", None):
                 existing_config["azure_auth_mode"] = profile.azure_auth_mode
+
+            # Extra OAuth scopes must survive a wizard re-run (save/reload parity
+            # with the wizard_fields mapping in _save_configuration)
+            if getattr(profile, "oidc_additional_scopes", ""):
+                existing_config["oidc_additional_scopes"] = profile.oidc_additional_scopes
             if getattr(profile, "client_certificate_path", None):
                 existing_config["client_certificate_path"] = profile.client_certificate_path
                 existing_config["client_certificate_key_path"] = profile.client_certificate_key_path
