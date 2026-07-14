@@ -24,6 +24,27 @@ func (c Claims) GetString(key string) string {
 	return s
 }
 
+// GetFirstOfList returns the first element of a string-array claim (e.g. the
+// Okta "groups" claim), or the claim itself when it's a plain string, or ""
+// when missing/empty/wrong type.
+func (c Claims) GetFirstOfList(key string) string {
+	v, ok := c[key]
+	if !ok {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case []interface{}:
+		for _, item := range val {
+			if s, ok := item.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
 // GetFloat returns a float64 claim value, or 0 if missing/wrong type.
 func (c Claims) GetFloat(key string) float64 {
 	v, ok := c[key]

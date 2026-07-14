@@ -175,6 +175,18 @@ def decode_jwt_payload(token):
         return {}
 
 
+def _first_of_list(value):
+    """First non-empty string of an array claim, the value itself when it's a
+    plain string, or "" otherwise (mirrors Go jwt.Claims.GetFirstOfList)."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and item:
+                return item
+    return ""
+
+
 def extract_user_info(payload):
     """Extract user information from JWT claims"""
     # Extract basic user info
@@ -239,11 +251,16 @@ def extract_user_info(payload):
         or payload.get("division")
         or "unspecified"
     )
+    # Team falls back to the first entry of the "groups" array claim so
+    # group-based cost attribution (dashboards aggregating by team.id) works
+    # for IdPs that only send group membership as an array (e.g. Okta's
+    # groups claim). Mirrored in the Go otel extractor — keep in sync.
     team = (
         payload.get("custom:team")
         or payload.get("team")
         or payload.get("team_id")
         or payload.get("group")
+        or _first_of_list(payload.get("groups"))
         or "default-team"
     )
     cost_center = (

@@ -104,11 +104,18 @@ func ExtractUserInfoWithTagKey(claims jwt.Claims, tagKey string) UserInfo {
 		info.Department = "unspecified"
 	}
 
-	// Team
+	// Team. Falls back to the first entry of the "groups" array claim so
+	// group-based cost attribution (dashboards aggregating by team.id) works
+	// for IdPs that only send group membership as an array (e.g. Okta's
+	// groups claim) — previously such users all collapsed to "default-team".
+	// Multi-group users are attributed to their first-listed group: metric
+	// dimensions can only carry one value without double-counting cost.
+	// Mirrored in the Python otel_helper — keep in sync.
 	info.Team = firstNonEmpty(
 		claims.GetString("team"),
 		claims.GetString("team_id"),
 		claims.GetString("group"),
+		claims.GetFirstOfList("groups"),
 	)
 	if info.Team == "" {
 		info.Team = "default-team"
