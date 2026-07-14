@@ -188,8 +188,8 @@ class TestCostOnlyPolicies:
         assert tester.status_code == 0
         kwargs = mock_manager.create_policy.call_args.kwargs
         assert kwargs["monthly_token_limit"] == 0
-        # Cost limits must be written to the policy item
-        assert mock_manager.table.update_item.called
+        # Cost limits are first-class create_policy arguments
+        assert kwargs["monthly_cost_limit"] == 50.0
 
     @patch("claude_code_with_bedrock.cli.commands.quota._get_quota_manager")
     @patch("claude_code_with_bedrock.cli.commands.quota.Config")
@@ -203,7 +203,8 @@ class TestCostOnlyPolicies:
         assert tester.status_code == 0
         kwargs = mock_manager.create_policy.call_args.kwargs
         assert kwargs["monthly_token_limit"] == 0
-        assert mock_manager.table.update_item.called
+        assert kwargs["monthly_cost_limit"] == 200.0
+        assert kwargs["daily_cost_limit"] == 20.0
 
     @patch("claude_code_with_bedrock.cli.commands.quota._get_quota_manager")
     @patch("claude_code_with_bedrock.cli.commands.quota.Config")
@@ -217,7 +218,7 @@ class TestCostOnlyPolicies:
         assert tester.status_code == 0
         kwargs = mock_manager.create_policy.call_args.kwargs
         assert kwargs["monthly_token_limit"] == 0
-        assert mock_manager.table.update_item.called
+        assert kwargs["monthly_cost_limit"] == 30.0
 
     @patch("claude_code_with_bedrock.cli.commands.quota._get_quota_manager")
     @patch("claude_code_with_bedrock.cli.commands.quota.Config")

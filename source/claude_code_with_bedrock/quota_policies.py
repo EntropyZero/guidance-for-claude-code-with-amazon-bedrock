@@ -4,6 +4,7 @@
 """Quota policy CRUD operations for fine-grained quota management."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import boto3
@@ -63,6 +64,25 @@ def _parse_tokens(value: str | int) -> int:
     return int(value)
 
 
+def _policy_restrictiveness_key(policy: QuotaPolicy) -> tuple:
+    """Sort key for "most restrictive" group policy selection.
+
+    A limit of 0/None means "no limit in that denomination" and sorts as
+    infinity. Token limits compare first; among policies with no token limit
+    (cost mode) the lowest monthly cost budget wins; daily cost breaks ties.
+    Mirrors the identical keys in the quota_check and quota_monitor Lambdas —
+    keep the three in sync.
+    """
+    token_limit = policy.monthly_token_limit or 0
+    monthly_cost = policy.monthly_cost_limit or 0
+    daily_cost = policy.daily_cost_limit or 0
+    return (
+        token_limit if token_limit > 0 else float("inf"),
+        monthly_cost if monthly_cost > 0 else float("inf"),
+        daily_cost if daily_cost > 0 else float("inf"),
+    )
+
+
 class QuotaPolicyError(Exception):
     """Base exception for quota policy operations."""
 
@@ -119,19 +139,23 @@ class QuotaPolicyManager:
         daily_enforcement_mode: EnforcementMode = EnforcementMode.ALERT,
         enabled: bool = True,
         created_by: str | None = None,
+        monthly_cost_limit: float = 0.0,
+        daily_cost_limit: float = 0.0,
     ) -> QuotaPolicy:
         """Create a new quota policy.
 
         Args:
             policy_type: Type of policy (user, group, default).
             identifier: Policy identifier (email for user, group name for group, "default" for default).
-            monthly_token_limit: Monthly token limit.
+            monthly_token_limit: Monthly token limit (0 = disabled; cost mode).
             daily_token_limit: Optional daily token limit.
             warning_threshold_80: Optional 80% warning threshold. Auto-calculated if not provided.
             warning_threshold_90: Optional 90% warning threshold. Auto-calculated if not provided.
             enforcement_mode: Alert or block mode (default: alert).
             enabled: Whether the policy is enabled (default: True).
             created_by: Admin email who created the policy.
+            monthly_cost_limit: Monthly $ budget (0 = disabled).
+            daily_cost_limit: Daily $ budget (0 = disabled).
 
         Returns:
             Created QuotaPolicy object.
@@ -156,6 +180,8 @@ class QuotaPolicyManager:
             identifier=identifier,
             monthly_token_limit=monthly_token_limit,
             daily_token_limit=daily_token_limit,
+            monthly_cost_limit=monthly_cost_limit or 0.0,
+            daily_cost_limit=daily_cost_limit or 0.0,
             warning_threshold_80=warning_threshold_80,
             warning_threshold_90=warning_threshold_90,
             enforcement_mode=enforcement_mode,
@@ -216,6 +242,8 @@ class QuotaPolicyManager:
         enforcement_mode: EnforcementMode | None = None,
         daily_enforcement_mode: EnforcementMode | None = None,
         enabled: bool | None = None,
+        monthly_cost_limit: float | None = None,
+        daily_cost_limit: float | None = None,
     ) -> QuotaPolicy:
         """Update an existing policy.
 
@@ -228,6 +256,8 @@ class QuotaPolicyManager:
             warning_threshold_90: New 90% threshold (optional).
             enforcement_mode: New enforcement mode (optional).
             enabled: New enabled status (optional).
+            monthly_cost_limit: New monthly $ budget (optional; 0 disables).
+            daily_cost_limit: New daily $ budget (optional; 0 disables).
 
         Returns:
             Updated QuotaPolicy object.
@@ -284,6 +314,15 @@ class QuotaPolicyManager:
             update_parts.append("#enabled = :enabled")
             expression_values[":enabled"] = enabled
             expression_names["#enabled"] = "enabled"
+
+        # Cost budgets: DynamoDB rejects Python floats, store as Decimal.
+        if monthly_cost_limit is not None:
+            update_parts.append("monthly_cost_limit = :mcl")
+            expression_values[":mcl"] = Decimal(str(monthly_cost_limit))
+
+        if daily_cost_limit is not None:
+            update_parts.append("daily_cost_limit = :dcl")
+            expression_values[":dcl"] = Decimal(str(daily_cost_limit))
 
         pk = self._make_pk(policy_type, identifier)
 
@@ -392,8 +431,7 @@ class QuotaPolicyManager:
                     group_policies.append(group_policy)
 
             if group_policies:
-                # Most restrictive = lowest monthly_token_limit
-                return min(group_policies, key=lambda p: p.monthly_token_limit)
+                return min(group_policies, key=_policy_restrictiveness_key)
 
         # 3. Fall back to default policy
         default_policy = self.get_policy(PolicyType.DEFAULT, "default")
@@ -485,6 +523,9 @@ class QuotaPolicyManager:
             else:
                 item["daily_token_limit"] = ""
 
+            item["monthly_cost_limit"] = policy.monthly_cost_limit or ""
+            item["daily_cost_limit"] = policy.daily_cost_limit or ""
+
             exported.append(item)
 
         return exported
@@ -552,6 +593,8 @@ class QuotaPolicyManager:
                                 identifier=parsed["identifier"],
                                 monthly_token_limit=parsed["monthly_token_limit"],
                                 daily_token_limit=parsed.get("daily_token_limit"),
+                                monthly_cost_limit=parsed.get("monthly_cost_limit"),
+                                daily_cost_limit=parsed.get("daily_cost_limit"),
                                 enforcement_mode=parsed.get("enforcement_mode", EnforcementMode.ALERT),
                                 enabled=parsed.get("enabled", True),
                             )
@@ -582,6 +625,8 @@ class QuotaPolicyManager:
                             identifier=parsed["identifier"],
                             monthly_token_limit=parsed["monthly_token_limit"],
                             daily_token_limit=parsed.get("daily_token_limit"),
+                            monthly_cost_limit=parsed.get("monthly_cost_limit", 0.0),
+                            daily_cost_limit=parsed.get("daily_cost_limit", 0.0),
                             enforcement_mode=parsed.get("enforcement_mode", EnforcementMode.ALERT),
                             enabled=parsed.get("enabled", True),
                         )
@@ -672,6 +717,18 @@ class QuotaPolicyManager:
             # Auto-calculate daily limit from monthly with burst buffer
             burst_factor = 1 + (burst_buffer_percent / 100)
             result["daily_token_limit"] = int(monthly_token_limit / 30 * burst_factor)
+
+        # Parse cost budgets ($, optional — round-trips with export_policies)
+        for cost_field in ("monthly_cost_limit", "daily_cost_limit"):
+            cost_str = policy_dict.get(cost_field, "")
+            if cost_str is not None and str(cost_str).strip():
+                try:
+                    cost_value = float(cost_str)
+                except (ValueError, TypeError):
+                    raise ValueError(f"Row {row_num}: Invalid {cost_field} '{cost_str}'")
+                if cost_value < 0:
+                    raise ValueError(f"Row {row_num}: Invalid {cost_field} '{cost_str}' (must be >= 0)")
+                result[cost_field] = cost_value
 
         # Parse enforcement mode
         enforcement_str = policy_dict.get("enforcement_mode", "alert")
