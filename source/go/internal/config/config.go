@@ -62,6 +62,13 @@ type ProfileConfig struct {
 	// See otel.ResolveAttributionSources for the expression syntax.
 	AttributionMap map[string][]string `json:"attribution_map,omitempty"`
 
+	// Deployment-static telemetry attributes written by ccwb package (same
+	// values the settings bake into OTEL_RESOURCE_ATTRIBUTES). attribution_map
+	// static: sources read these FIRST, falling back to the environment
+	// variable — credential_process is often invoked outside Claude Code's
+	// env (plain aws CLI calls), where the variable doesn't exist.
+	StaticResourceAttributes map[string]string `json:"static_resource_attributes,omitempty"`
+
 	// AWS session-tag key used for cost attribution. Default "Project" matches
 	// the historical behavior; customers who standardize on a different name
 	// (CostCenter, BillingCode, etc.) override here. Callers resolve absent or

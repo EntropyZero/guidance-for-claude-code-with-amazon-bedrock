@@ -24,7 +24,7 @@ extract_user_info = _module.extract_user_info
 
 class TestLegacyDefaultChains:
     def test_group_membership_does_not_feed_role_or_change_team(self, monkeypatch):
-        monkeypatch.setattr(_module, "_load_attribution_map", lambda: {})
+        monkeypatch.setattr(_module, "_load_attribution_config", lambda: ({}, {}))
         result = extract_user_info({"email": "dev@corp.com", "group": "eng", "groups": ["engineering"]})
         assert result["team"] == "eng"  # legacy team -> team_id -> group chain
         assert result["role"] == "user"  # groups never feed role by default
@@ -43,9 +43,15 @@ class TestResolveAttributionSources:
     def test_claims_sorted_joins_alpha(self):
         assert self._resolve({"groups": ["zeta", "alpha", "mid"]}, ["claims_sorted:groups"]) == "alpha|mid|zeta"
 
-    def test_static(self, monkeypatch):
+    def test_static_env_fallback(self, monkeypatch):
         monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=platform-eng")
         assert self._resolve({}, ["static:team.id"]) == "platform-eng"
+
+    def test_static_config_wins_over_env(self, monkeypatch):
+        """config.json statics resolve identically in every invocation context."""
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=env-value")
+        result = _module._resolve_attribution_sources({}, ["static:team.id"], {"team.id": "config-value"})
+        assert result == "config-value"
 
     def test_literal_and_fallback_order(self, monkeypatch):
         monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
@@ -60,12 +66,15 @@ class TestApplyAttributionMap:
         monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team.id=platform-eng")
         monkeypatch.setattr(
             _module,
-            "_load_attribution_map",
-            lambda: {
-                "team.id": ["static:team.id"],
-                "role": ["claims_sorted:groups"],
-                "cost_center": ["claim:absent_claim"],  # empty -> legacy kept
-            },
+            "_load_attribution_config",
+            lambda: (
+                {
+                    "team.id": ["static:team.id"],
+                    "role": ["claims_sorted:groups"],
+                    "cost_center": ["claim:absent_claim"],  # empty -> legacy kept
+                },
+                {},
+            ),
         )
         result = extract_user_info({"email": "dev@corp.com", "team": "claim-team", "groups": ["zeta", "alpha"]})
         assert result["team"] == "platform-eng"  # deployment static per map
@@ -74,7 +83,7 @@ class TestApplyAttributionMap:
         assert result["department"] == "unspecified"  # unmapped dims untouched
 
     def test_missing_config_is_legacy(self, monkeypatch):
-        monkeypatch.setattr(_module, "_load_attribution_map", lambda: {})
+        monkeypatch.setattr(_module, "_load_attribution_config", lambda: ({}, {}))
         result = extract_user_info({"team": "platform"})
         assert result["team"] == "platform"
         assert result["role"] == "user"

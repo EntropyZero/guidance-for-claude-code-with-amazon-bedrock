@@ -760,7 +760,15 @@ class PackageCommand(Command):
         console.print("\n[cyan]Creating configuration...[/cyan]")
         # Pass the appropriate identifier based on federation type
         federation_identifier = federated_role_arn if federation_type == "direct" else identity_pool_id
-        self._create_config(output_dir, profile, federation_identifier, federation_type, profile_name, console)
+        self._create_config(
+            output_dir,
+            profile,
+            federation_identifier,
+            federation_type,
+            profile_name,
+            console,
+            otel_resource_attributes=otel_resource_attributes,
+        )
 
         # Generate IDC-specific collector config with static identity
         _is_sidecar = getattr(profile, "monitoring_mode", "central") == "sidecar"
@@ -2656,7 +2664,14 @@ RUN pyinstaller \
 
         # Regenerate config.json
         console.print("[cyan]Generating configuration...[/cyan]")
-        self._create_config(output_dir, profile, federation_identifier, federation_type, profile_name)
+        self._create_config(
+            output_dir,
+            profile,
+            federation_identifier,
+            federation_type,
+            profile_name,
+            otel_resource_attributes=otel_resource_attributes,
+        )
 
         # Regenerate installer scripts
         console.print("[cyan]Generating installer scripts...[/cyan]")
@@ -2760,6 +2775,7 @@ RUN pyinstaller \
         federation_type: str = "cognito",
         profile_name: str = "ClaudeCode",
         console=None,
+        otel_resource_attributes: str | None = None,
     ) -> Path:
         """Create the configuration file.
 
@@ -2769,6 +2785,12 @@ RUN pyinstaller \
             federation_identifier: Identity pool ID or role ARN
             federation_type: "cognito" or "direct"
             profile_name: Name to use as key in config.json (defaults to "ClaudeCode" for backward compatibility)
+            otel_resource_attributes: "k=v,k=v" static telemetry attributes (the
+                same values baked into the settings' OTEL_RESOURCE_ATTRIBUTES).
+                Also written into config.json so the helpers' attribution_map
+                static: sources resolve without depending on the process
+                environment — credential_process is often invoked outside
+                Claude Code's env (e.g. plain aws CLI calls).
         """
         sso_enabled = getattr(profile, "sso_enabled", True)
         config = {
@@ -2830,6 +2852,22 @@ RUN pyinstaller \
         # docstring for the source expression syntax).
         if getattr(profile, "attribution_map", None):
             config[profile_name]["attribution_map"] = profile.attribution_map
+
+        # Static telemetry attributes: same values the settings bake into
+        # OTEL_RESOURCE_ATTRIBUTES, carried in config.json so attribution_map
+        # static: sources resolve identically in every invocation context
+        # (credential_process runs outside Claude Code's environment).
+        if getattr(profile, "monitoring_enabled", False):
+            resolved_attrs = otel_resource_attributes or (
+                "department=default,team.id=default,cost_center=default,organization=default,project=default"
+            )
+            static_attrs = {}
+            for pair in resolved_attrs.split(","):
+                key, sep, value = pair.strip().partition("=")
+                if sep and key.strip() and value.strip():
+                    static_attrs[key.strip()] = value.strip()
+            if static_attrs:
+                config[profile_name]["static_resource_attributes"] = static_attrs
 
         # Add selected_model if available
         if hasattr(profile, "selected_model") and profile.selected_model:

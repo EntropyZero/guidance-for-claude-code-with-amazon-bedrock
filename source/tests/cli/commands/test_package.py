@@ -556,3 +556,58 @@ class TestCopyExtraFiles:
         result = PackageCommand()._copy_extra_files(profile, out, MagicMock())
         assert result is not None
         assert (out / "w.bat").exists()
+
+
+class TestStaticResourceAttributes:
+    """config.json carries the deployment's static telemetry attributes.
+
+    attribution_map static: sources must resolve identically in every
+    invocation context — credential_process runs outside Claude Code's
+    environment, where OTEL_RESOURCE_ATTRIBUTES doesn't exist.
+    """
+
+    def _profile(self, **overrides):
+        defaults = {
+            "name": "test",
+            "provider_domain": "test.okta.com",
+            "client_id": "test-client-id",
+            "credential_storage": "keyring",
+            "aws_region": "us-gov-west-1",
+            "identity_pool_name": "test-pool",
+            "allowed_bedrock_regions": ["us-gov-west-1"],
+            "monitoring_enabled": True,
+        }
+        defaults.update(overrides)
+        return Profile(**defaults)
+
+    def _config(self, profile, otel_resource_attributes=None):
+        command = PackageCommand()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = command._create_config(
+                Path(tmpdir),
+                profile,
+                "test-identity-pool-id",
+                otel_resource_attributes=otel_resource_attributes,
+            )
+            with open(config_path, encoding="utf-8") as f:
+                return json.load(f)["ClaudeCode"]
+
+    def test_customized_attributes_written(self):
+        config = self._config(
+            self._profile(),
+            otel_resource_attributes="department=platform,team.id=infra-core,cost_center=CC-4521,organization=acme",
+        )
+        assert config["static_resource_attributes"] == {
+            "department": "platform",
+            "team.id": "infra-core",
+            "cost_center": "CC-4521",
+            "organization": "acme",
+        }
+
+    def test_defaults_written_when_not_customized(self):
+        config = self._config(self._profile())
+        assert config["static_resource_attributes"]["team.id"] == "default"
+
+    def test_omitted_when_monitoring_disabled(self):
+        config = self._config(self._profile(monitoring_enabled=False))
+        assert "static_resource_attributes" not in config
