@@ -4218,11 +4218,20 @@ Available metrics include:
             if should_write_model:
                 from claude_code_with_bedrock.models import get_claude_code_alias, resolve_model_for_tier
 
-                # Use a Claude Code alias (sonnet/opus/opusplan/haiku) so ANTHROPIC_MODEL
-                # feeds through the DEFAULT_*_MODEL resolution chain for CRIS-aware routing.
-                # model_alias is set during ccwb init (e.g. opus vs opusplan for Opus models).
+                # ANTHROPIC_MODEL: ship the CONCRETE model ID, not the tier alias.
+                # Alias resolution through the DEFAULT_*_MODEL vars is
+                # version-dependent in Claude Code on Bedrock — older builds pass
+                # the literal alias ("opus") to Bedrock as the model ID, which
+                # 400s as an unknown model (observed as a bare "API Error").
+                # The one alias that must stay an alias is "opusplan": its
+                # plan/execute model split has no single concrete ID, and it only
+                # functions on Claude Code versions that resolve aliases anyway.
+                # model_alias is set during ccwb init (e.g. opus vs opusplan).
                 alias = getattr(profile, "model_alias", None) or get_claude_code_alias(profile.selected_model)
-                settings["env"]["ANTHROPIC_MODEL"] = alias or profile.selected_model
+                if alias == "opusplan":
+                    settings["env"]["ANTHROPIC_MODEL"] = alias
+                else:
+                    settings["env"]["ANTHROPIC_MODEL"] = profile.selected_model
 
                 # Set all model tier env vars using the CRIS prefix from init.
                 # Claude Code uses these to resolve the correct CRIS-prefixed
